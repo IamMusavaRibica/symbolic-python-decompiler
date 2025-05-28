@@ -1,0 +1,4 @@
+colorama==0.4.6
+loguru==0.7.3
+networkx==3.2.1
+pydotplus==2.0.2
