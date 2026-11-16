@@ -391,6 +391,19 @@ class ControlMixin:
         return TERMINATED
 
     def parse_while(self, header: InstructionNode, st: State):
+        # Where 'break' goes is partly guessed before the body is parsed (find_break_target).
+        # A wrong guess shows as a body that makes no sense; then the loop is parsed again
+        # with less guessing.
+        try:
+            return self._parse_while(header, st, True, True)
+        except DecompileError:
+            pass
+        try:
+            return self._parse_while(header, st, False, True)
+        except DecompileError:
+            return self._parse_while(header, st, False, False)
+
+    def _parse_while(self, header: InstructionNode, st: State, guess_target: bool, use_layout: bool):
         ctx, stack = st.ctx, st.stack
         loop = self.analysis.loops[header]
         fb = LoopBlock(header, loop.nodes, False)
@@ -406,7 +419,11 @@ class ControlMixin:
                 test, start, normal_exit = cond.test, cond.true, cond.false
             elif inside_false and not inside_true and negatable(cond.test):
                 test, start, normal_exit = negate(cond.test), cond.false, cond.true
-        self.find_break_target(fb, normal_exit)
+        self.find_break_target(fb, normal_exit, cond.nodes if normal_exit is not None else ())
+        if not guess_target:
+            fb.break_target = None
+        if not use_layout:
+            fb.layout_exit = None
         if normal_exit is not None:
             owners = cond.nodes
             if start is header or not self.owned(start, owners):
@@ -420,7 +437,7 @@ class ControlMixin:
         return self.finish_loop(st, fb, normal_exit, owners,
                                 lambda orelse: ast.While(test=test, body=body.stmts or [ast.Pass()], orelse=orelse))
 
-    def find_break_target(self, fb: LoopBlock, normal_exit) -> None:
+    def find_break_target(self, fb: LoopBlock, normal_exit, cond_nodes) -> None:
         """Work out where 'break' goes in a while loop, as far as the graph alone tells.
 
         Code that leaves the loop either ends in 'return'/'raise' or arrives
@@ -434,6 +451,15 @@ class ControlMixin:
             for _, succ in node.successors():
                 if succ not in fb.nodes and succ not in exits:
                     exits.append(succ)
+        behind = [e for e in exits if not e.is_pseudo and e.offset > fb.end_offset
+                  and e.opname != 'LOAD_ASSERTION_ERROR']
+        if behind:
+            fb.layout_exit = max(behind, key=lambda e: e.offset)
+        if normal_exit is not None and any(p in fb.nodes and p not in cond_nodes for p, _ in normal_exit.preds):
+            # the loop is left to where it ends anyway from somewhere else than its test:
+            # 'break' in a loop without else clause
+            fb.break_target = normal_exit
+            return
         dominates = self.analysis.dominates
         votes = {}
         for start in exits:
@@ -453,13 +479,13 @@ class ControlMixin:
                         work.append(succ)
                     else:
                         votes[succ] = votes.get(succ, 0) + 1
+        if normal_exit is not None and votes.get(normal_exit):
+            # a path that arrives where the loop ends anyway: 'break' in a loop without else clause
+            fb.break_target = normal_exit
+            return
         joins = [node for node, count in votes.items() if count >= 2]
         if len(joins) == 1:
             fb.break_target = joins[0]
-        behind = [e for e in exits if not e.is_pseudo and e.offset > fb.end_offset
-                  and e.opname != 'LOAD_ASSERTION_ERROR']
-        if behind:
-            fb.layout_exit = max(behind, key=lambda e: e.offset)
 
     def finish_loop(self, st: State, fb: LoopBlock, normal_exit, owners, make):
         """Emit a loop statement once its body is known; work out ``else`` and where control continues."""
