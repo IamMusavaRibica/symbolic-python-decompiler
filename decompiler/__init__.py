@@ -76,7 +76,8 @@ class Decompiler:
     def get_source_code(self) -> str:
         if self.tree is None:
             self.decompile()
-        return _run_deep(lambda: ast.unparse(self.tree)) + '\n'
+        from decompiler.emit import unparse
+        return _run_deep(lambda: unparse(self.tree))
 
     # -- used by the walkers -----------------------------------------------------
     def body_of(self, code: CodeType, kind: str) -> List[ast.stmt]:

@@ -138,9 +138,11 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             # loop's 'break's go, even when (graph-wise) it could be nested in the breaking branch.
             if not entering and ctx.fblocks:
                 loop = ctx.fblocks[-1]
-                if (loop.is_loop and not loop.has_exit and node is loop.layout_exit
-                        and loop.break_target in (None, node)):
-                    return True
+                if loop.is_loop and not loop.is_for:
+                    if node is loop.break_target:
+                        return True  # the code after the loop
+                    if not loop.has_exit and node is loop.layout_exit and loop.break_target is None:
+                        return True
         return False
 
     def dispatch(self, node: InstructionNode, st: State, entering: bool = False):
@@ -199,12 +201,14 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             if fb.break_target is None and node not in fb.nodes:
                 fb.break_target = node
             return [ast.Break()] if node is fb.break_target else None
-        return self._resolve(node, len(ctx.fblocks) - 1, ctx, False)
+        return self._resolve(node, len(ctx.fblocks) - 1, ctx, False, entry=True)
 
-    def _resolve(self, node, index: int, ctx: Ctx, past_loop: bool, after_copy: bool = False):
+    def _resolve(self, node, index: int, ctx: Ctx, past_loop: bool, after_copy: bool = False, entry: bool = False):
         """``after_copy``: ``node`` follows an inlined finally body (so several of its paths may end there)."""
         if node is None or node is TERMINATED:
             return None
+        # clean-up code that other code runs as well is not the clean-up code of a jump statement
+        exclusive = entry or after_copy or len(node.preds) == 1
         if index < 0:
             # every frame block is closed: 'return <constant>'
             # (the compiler emits these two instructions for one 'return' only: nothing else leads to them)
@@ -218,7 +222,7 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             if node is fb.header:
                 return [ast.Continue()]
             after = fb.unwind(self, node, False)
-            if after is None:
+            if after is None or (after is not node and not exclusive):
                 return None
             if fb.break_target is not None:
                 if after is fb.break_target:
@@ -235,7 +239,7 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
                 return [ast.Break()]
             return None
         after = fb.unwind(self, node, False)
-        if after is None or after is TERMINATED:
+        if after is None or after is TERMINATED or (after is not node and not exclusive):
             return None
         return self._resolve(after, index - 1, ctx, past_loop, isinstance(fb, FinallyTryBlock))
 

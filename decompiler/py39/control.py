@@ -348,6 +348,13 @@ class ControlMixin:
             orelse_jump = self.resolve_jump(orelse.exit, ctx, ours(orelse.exit))
             if body_jump is None and orelse_jump is None:
                 raise DecompileError('the branches of an if never meet', cond.last)
+            if body_jump is not None and orelse_jump is not None:
+                # Both could be jumps.  The one placed last in the bytecode may just as well be the
+                # way the enclosing statement ends; whoever owns that statement decides.
+                if body.exit.offset > orelse.exit.offset:
+                    body_jump = None
+                else:
+                    orelse_jump = None
             if body_jump is not None:
                 body.stmts.extend(body_jump)
                 body.exit = None
@@ -466,8 +473,9 @@ class ControlMixin:
             if start is normal_exit:
                 continue
             if len(self.analysis.forward_preds(start)) >= 2:
-                votes[start] = votes.get(start, 0) + 2  # entered directly from the loop and from elsewhere
-                continue
+                # entered directly from several places: a join itself (or the body of 'if a or b:',
+                # in which case the walk below finds the real one behind it)
+                votes[start] = votes.get(start, 0) + 2
             seen = {start}
             work = [start]
             while work:
@@ -484,8 +492,26 @@ class ControlMixin:
             fb.break_target = normal_exit
             return
         joins = [node for node, count in votes.items() if count >= 2]
+        if len(joins) > 1:
+            # Several joins: the body of 'if a or b:' is entered from two tests as well.  Every
+            # path that leaves the loop without ending comes by the code after the loop, so that
+            # code is the join all the other joins lead to.
+            joins = [j for j in joins if all(k is j or self._reaches(k, j) for k in joins)]
         if len(joins) == 1:
             fb.break_target = joins[0]
+
+    @staticmethod
+    def _reaches(start: InstructionNode, goal: InstructionNode) -> bool:
+        seen = {start}
+        work = [start]
+        while work:
+            for _, succ in work.pop().successors():
+                if succ is goal:
+                    return True
+                if succ not in seen:
+                    seen.add(succ)
+                    work.append(succ)
+        return False
 
     def finish_loop(self, st: State, fb: LoopBlock, normal_exit, owners, make):
         """Emit a loop statement once its body is known; work out ``else`` and where control continues."""
