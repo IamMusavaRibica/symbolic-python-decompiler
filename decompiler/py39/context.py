@@ -50,6 +50,9 @@ class LoopBlock(FBlock):
         self.is_for = is_for  # the loop keeps an iterator on the stack
         self.break_target: Optional[InstructionNode] = None  # found when the first 'break' is seen
         self.has_exit = True  # the loop can end without 'break' (False for 'while True')
+        #: layout hint for 'while True': the node outside the loop that was placed last in the bytecode,
+        #: if it lies behind the loop.  Code after the loop is laid out after everything in the loop.
+        self.layout_exit: Optional[InstructionNode] = None
         #: layout hint: offset of the last jump back to the header
         self.end_offset = max(header.back_jumps, default=header.offset)
 

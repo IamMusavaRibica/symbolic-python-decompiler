@@ -51,10 +51,13 @@ class Decompiler:
     module is still produced; ``failures`` lists what was skipped.
     """
 
-    def __init__(self, code: CodeType, toplevel: bool = True, strict: bool = True):
+    def __init__(self, code: CodeType, toplevel: bool = True, strict: bool = True, peephole: bool = None):
         self.code = code
         self.toplevel = toplevel
         self.strict = strict
+        #: whether the code went through the peephole optimizer (guessed from the code when not given);
+        #: only matters for a few spellings that compile differently without it
+        self.peephole = _looks_optimized(code) if peephole is None else peephole
         self.tree: ast.Module = None
         #: (qualified name of the code object, error) for every body that was skipped
         self.failures: List[tuple] = []
@@ -162,9 +165,28 @@ class Decompiler:
         return result
 
 
-def decompile(code: CodeType) -> str:
+def decompile(code: CodeType, peephole: bool = None) -> str:
     """Decompile a code object to source code."""
-    return Decompiler(code).get_source_code()
+    return Decompiler(code, peephole=peephole).get_source_code()
+
+
+def _looks_optimized(code: CodeType) -> bool:
+    """False when the bytecode has shapes the peephole optimizer never leaves behind."""
+    import dis
+    jumps = ('JUMP_FORWARD', 'JUMP_ABSOLUTE')
+    instructions = list(dis.get_instructions(code))
+    by_offset = {i.offset: i for i in instructions}
+    for index, instr in enumerate(instructions):
+        if instr.opname in jumps:
+            target = by_offset.get(instr.argval)
+            if target is not None and target.opname in jumps:
+                return False  # a jump to a jump would have been threaded
+            if index and instructions[index - 1].opname == 'RETURN_VALUE' and not instr.is_jump_target:
+                return False  # dead code after a return would have been removed
+        elif instr.opname == 'BUILD_TUPLE' and 0 < instr.arg <= index and all(
+                i.opname == 'LOAD_CONST' and not i.is_jump_target for i in instructions[index - instr.arg:index]):
+            return False  # a tuple of constants would have been folded
+    return all(_looks_optimized(c) for c in code.co_consts if isinstance(c, CodeType))
 
 
 # -- helpers --------------------------------------------------------------------

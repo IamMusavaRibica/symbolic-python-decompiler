@@ -103,7 +103,7 @@ def check_file(args):
             result['fatal'] = 'skipped: does not compile'
             return result
         result['objects'] = sum(1 for _ in walk(code))
-        decompiler = Decompiler(code, strict=False)
+        decompiler = Decompiler(code, strict=False, peephole=not nopeephole)
         try:
             text = decompiler.get_source_code()
         except Exception as e:
@@ -141,7 +141,7 @@ def explain(path: str, nopeephole: bool, only: str = '', context: int = 3) -> No
         source = f.read()
     compiler = compile_without_peephole if nopeephole else (lambda src, flags=0: compile_source(src, path, flags))
     code = compiler(source)
-    decompiler = Decompiler(code, strict=False)
+    decompiler = Decompiler(code, strict=False, peephole=not nopeephole)
     text = decompiler.get_source_code()
     for name, error in decompiler.failures:
         if only in name:

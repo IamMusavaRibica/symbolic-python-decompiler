@@ -406,6 +406,7 @@ class ControlMixin:
                 test, start, normal_exit = cond.test, cond.true, cond.false
             elif inside_false and not inside_true and negatable(cond.test):
                 test, start, normal_exit = negate(cond.test), cond.false, cond.true
+        self.find_break_target(fb, normal_exit)
         if normal_exit is not None:
             owners = cond.nodes
             if start is header or not self.owned(start, owners):
@@ -418,6 +419,47 @@ class ControlMixin:
         self.close_block(body, body_ctx, accept=(header,))
         return self.finish_loop(st, fb, normal_exit, owners,
                                 lambda orelse: ast.While(test=test, body=body.stmts or [ast.Pass()], orelse=orelse))
+
+    def find_break_target(self, fb: LoopBlock, normal_exit) -> None:
+        """Work out where 'break' goes in a while loop, as far as the graph alone tells.
+
+        Code that leaves the loop either ends in 'return'/'raise' or arrives
+        at the code after the loop.  Everything such a path runs before that
+        point belongs to it alone, so when two of these paths first meet other
+        code at the same node, that node is the code after the loop.  With
+        fewer than two 'break's the target is found while the body is parsed.
+        """
+        exits = []
+        for node in fb.nodes:
+            for _, succ in node.successors():
+                if succ not in fb.nodes and succ not in exits:
+                    exits.append(succ)
+        dominates = self.analysis.dominates
+        votes = {}
+        for start in exits:
+            if start is normal_exit:
+                continue
+            if len(self.analysis.forward_preds(start)) >= 2:
+                votes[start] = votes.get(start, 0) + 2  # entered directly from the loop and from elsewhere
+                continue
+            seen = {start}
+            work = [start]
+            while work:
+                for _, succ in work.pop().successors():
+                    if succ in seen:
+                        continue
+                    seen.add(succ)
+                    if dominates(start, succ):
+                        work.append(succ)
+                    else:
+                        votes[succ] = votes.get(succ, 0) + 1
+        joins = [node for node, count in votes.items() if count >= 2]
+        if len(joins) == 1:
+            fb.break_target = joins[0]
+        behind = [e for e in exits if not e.is_pseudo and e.offset > fb.end_offset
+                  and e.opname != 'LOAD_ASSERTION_ERROR']
+        if behind:
+            fb.layout_exit = max(behind, key=lambda e: e.offset)
 
     def finish_loop(self, st: State, fb: LoopBlock, normal_exit, owners, make):
         """Emit a loop statement once its body is known; work out ``else`` and where control continues."""

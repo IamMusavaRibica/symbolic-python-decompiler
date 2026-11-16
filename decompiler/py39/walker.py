@@ -138,8 +138,8 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             # loop's 'break's go, even when (graph-wise) it could be nested in the breaking branch.
             if not entering and ctx.fblocks:
                 loop = ctx.fblocks[-1]
-                if (loop.is_loop and not loop.is_for and not loop.has_exit and node not in loop.nodes
-                        and node.offset > loop.end_offset and loop.break_target in (None, node)):
+                if (loop.is_loop and not loop.has_exit and node is loop.layout_exit
+                        and loop.break_target in (None, node)):
                     return True
         return False
 
@@ -201,14 +201,15 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             return [ast.Break()] if node is fb.break_target else None
         return self._resolve(node, len(ctx.fblocks) - 1, ctx, False)
 
-    def _resolve(self, node, index: int, ctx: Ctx, past_loop: bool):
+    def _resolve(self, node, index: int, ctx: Ctx, past_loop: bool, after_copy: bool = False):
+        """``after_copy``: ``node`` follows an inlined finally body (so several of its paths may end there)."""
         if node is None or node is TERMINATED:
             return None
         if index < 0:
             # every frame block is closed: 'return <constant>'
             # (the compiler emits these two instructions for one 'return' only: nothing else leads to them)
             if node.opname == 'LOAD_CONST' and node.next is not None and node.next.opname == 'RETURN_VALUE' \
-                    and len(node.preds) == 1 and len(node.next.preds) == 1 \
+                    and (len(node.preds) == 1 or after_copy) and len(node.next.preds) == 1 \
                     and self.kind in ('function', 'lambda', 'comprehension'):
                 return [self.make_return(self.const(node.argval))]
             return None
@@ -236,7 +237,7 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         after = fb.unwind(self, node, False)
         if after is None or after is TERMINATED:
             return None
-        return self._resolve(after, index - 1, ctx, past_loop)
+        return self._resolve(after, index - 1, ctx, past_loop, isinstance(fb, FinallyTryBlock))
 
     def close_block(self, block: Block, ctx: Ctx, accept=()) -> None:
         """Make sure ``block`` ends in a way its construct expects.
@@ -286,7 +287,8 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             if canon is fb.terminal:
                 if found is None:
                     found = copy
-                elif found is not copy:
+                elif found is not copy and not (found.opname == copy.opname == 'RETURN_VALUE'):
+                    # (the peephole optimizer turns jumps to a RETURN_VALUE into copies of it)
                     raise DecompileError('inconsistent copies of a finally body', copy)
                 continue
             if canon in seen:

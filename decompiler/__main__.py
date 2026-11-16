@@ -66,7 +66,8 @@ def main(argv=None) -> int:
         return 0
     if args.check:
         from decompiler.verify import COMPILERS, NOPEEPHOLE, STOCK, verify_code
-        result = verify_code(code, COMPILERS[NOPEEPHOLE if args.nopeephole else STOCK])
+        result = verify_code(code, COMPILERS[NOPEEPHOLE if args.nopeephole else STOCK],
+                             False if args.nopeephole else None)
         if result.decompiled is not None:
             print(result.decompiled)
         if result.ok:

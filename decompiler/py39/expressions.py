@@ -281,8 +281,10 @@ class ExpressionMixin:
                 for key, value in zip(mapping.keys, mapping.values):
                     if key is not None:
                         keywords.append(ast.keyword(arg=key.value, value=value))
-                    elif type(value) is ast.Dict and value.keys and all(
+                    elif keywords and type(value) is ast.Dict and value.keys and all(
                             k is not None and _is_keyword_name(k) for k in value.keys):
+                        # 'f(**a, k=v)': keywords after a '**' argument are merged in like one
+                        # (a leading '**{...}' is different: plain leading keywords are not merged)
                         if len(keywords) > start:
                             groups.append((start, len(keywords), None))
                         start = len(keywords)
@@ -301,7 +303,9 @@ class ExpressionMixin:
         sequence = self.pop_expr(st, node)
         if type(sequence) is ast.Tuple:
             args = list(sequence.elts)
-        elif isinstance(sequence, ast.Constant) and isinstance(sequence.value, tuple):
+        elif isinstance(sequence, ast.Constant) and isinstance(sequence.value, tuple) and self.decompiler.peephole:
+            # 'f(1, 2, **k)': the peephole optimizer folds the tuple of arguments.  Without it a
+            # constant tuple can only be a starred one, 'f(*(1, 2), **k)'.
             args = [self.const(v) for v in sequence.value]
         else:
             args = [ast.Starred(value=sequence, ctx=ast.Load())]
