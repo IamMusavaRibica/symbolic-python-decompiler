@@ -107,13 +107,13 @@ def code_header(code: CodeType) -> str:
     return ' '.join(parts)
 
 
-def _arg_text(node: InstructionNode, children: Dict[int, str]) -> str:
+def _arg_text(node: InstructionNode, children: Dict[InstructionNode, str]) -> str:
     op = node.opcode
     if op < dis.HAVE_ARGUMENT or op in _HASJUMP:
         return ''
     if op in _HASCONST:
         if isinstance(node.argval, CodeType):
-            return children[id(node.argval)]
+            return children[node]
         return const_key(node.argval)
     if op in _BY_NAME or op in _HASCOMPARE:
         return str(node.argval)
@@ -124,7 +124,8 @@ def _opname(node: InstructionNode) -> str:
     return 'POP_JUMP_IF' if node.is_branch else node.opname
 
 
-def dump_graph(graph: CodeGraph, path: str = '', offsets: bool = False, children: Optional[Dict[int, str]] = None) -> List[str]:
+def dump_graph(graph: CodeGraph, path: str = '', offsets: bool = False,
+               children: Optional[Dict[InstructionNode, str]] = None) -> List[str]:
     """Lines describing the instructions of a single graph (no header, no nested code)."""
     if children is None:
         children = _children(graph, path)
@@ -153,12 +154,18 @@ def dump_graph(graph: CodeGraph, path: str = '', offsets: bool = False, children
     return lines
 
 
-def _children(graph: CodeGraph, path: str) -> Dict[int, str]:
-    """id(code) -> label for every code object loaded by the graph, in canonical order."""
-    children: Dict[int, str] = {}
+def _children(graph: CodeGraph, path: str) -> Dict[InstructionNode, str]:
+    """Label for every instruction that loads a code object, in canonical order.
+
+    Each load gets its own label, also when two instructions load the very
+    same object: whether the compiler shares one constant between two equal
+    lambdas depends on whether they are on the same source line, which is
+    layout and must not make graphs differ.
+    """
+    children: Dict[InstructionNode, str] = {}
     for node in graph.nodes:
-        if node.opcode in _HASCONST and isinstance(node.argval, CodeType) and id(node.argval) not in children:
-            children[id(node.argval)] = f'<code {path}#{len(children)} {node.argval.co_name}>'
+        if node.opcode in _HASCONST and isinstance(node.argval, CodeType):
+            children[node] = f'<code {path}#{len(children)} {node.argval.co_name}>'
     return children
 
 
@@ -168,10 +175,6 @@ def dump_code(code: CodeType, offsets: bool = False, _path: str = '', _label: Op
     children = _children(graph, _path)
     out = [f'=== {_label or "<code " + code.co_name + ">"} {code_header(code)}']
     out.extend('  ' + line for line in dump_graph(graph, _path, offsets, children))
-    by_id = {}
-    for node in graph.nodes:
-        if node.opcode in _HASCONST and isinstance(node.argval, CodeType):
-            by_id.setdefault(id(node.argval), node.argval)
-    for n, (ident, label) in enumerate(children.items()):
-        out.append(dump_code(by_id[ident], offsets, f'{_path}{n}.', label))
+    for n, (node, label) in enumerate(children.items()):
+        out.append(dump_code(node.argval, offsets, f'{_path}{n}.', label))
     return '\n'.join(out)

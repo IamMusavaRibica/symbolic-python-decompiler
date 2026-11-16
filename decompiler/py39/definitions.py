@@ -159,6 +159,14 @@ class DefinitionMixin:
         while True:
             if stmts and isinstance(stmts[-1], ast.Return) and stmts[-1].value is None:
                 stmts = stmts[:-1]
+            if len(stmts) > 1 and isinstance(stmts[0], ast.Assign) and len(stmts[0].targets) == 1 and generators:
+                # 'for y in [expr]' is compiled as the assignment 'y = expr'
+                assign = stmts[0]
+                generators.append(ast.comprehension(target=assign.targets[0],
+                                                    iter=ast.List(elts=[assign.value], ctx=ast.Load()),
+                                                    ifs=[], is_async=0))
+                stmts = stmts[1:]
+                continue
             if len(stmts) != 1:
                 break
             stmt = stmts[0]

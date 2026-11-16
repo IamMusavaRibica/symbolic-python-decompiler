@@ -118,11 +118,43 @@ class Decompiler:
         if doc is not None:
             head.append(ast.Expr(value=ast.Constant(value=doc)))
         head.extend(self._declarations(walker, 'function'))
-        if code.co_flags & (CO_GENERATOR | CO_ASYNC_GENERATOR) and not _yields(stmts):
-            # a generator whose 'yield' is unreachable: keep one that produces no code
-            head.append(ast.If(test=ast.Constant(value=False), body=[ast.Expr(value=ast.Yield(value=None))],
-                               orelse=[]))
+        head.extend(self._silent_scope_facts(code, walker, stmts))
         return head + stmts or [ast.Pass()]
+
+    @staticmethod
+    def _silent_scope_facts(code, walker, stmts) -> List[ast.stmt]:
+        """Statements that compile to no instructions but restore what unreachable code decided.
+
+        Code the compiler dropped (after a ``return``, under ``if 0:``) still
+        took part in deciding which names are local, which are shared with
+        nested functions and whether the function is a generator.
+        """
+        result: List[ast.stmt] = []
+        nodes = walker.graph.nodes
+        nargs = code.co_argcount + code.co_kwonlyargcount + bool(code.co_flags & 0x04) + bool(code.co_flags & 0x08)
+        bound = {n.argval for n in nodes if n.opname in ('STORE_FAST', 'DELETE_FAST', 'STORE_DEREF', 'DELETE_DEREF')}
+        bound.update(code.co_varnames[:nargs])
+        for name in list(code.co_varnames[nargs:]) + list(code.co_cellvars):
+            if name not in bound and name.isidentifier():
+                # a local variable that is never assigned: an annotation makes it local without code
+                bound.add(name)
+                result.append(ast.AnnAssign(target=ast.Name(id=name, ctx=ast.Store()),
+                                            annotation=ast.Name(id='object', ctx=ast.Load()), value=None, simple=1))
+        captured = {n.argval for n in nodes if n.opname == 'LOAD_CLOSURE'}
+        hidden = [name for name in code.co_cellvars if name not in captured and name.isidentifier()]
+        dead: List[ast.stmt] = []
+        if hidden:
+            # variables shared with a nested function that is never created
+            names = ast.Tuple(elts=[ast.Name(id=name, ctx=ast.Load()) for name in hidden], ctx=ast.Load())
+            no_args = ast.arguments(posonlyargs=[], args=[], vararg=None, kwonlyargs=[], kw_defaults=[], kwarg=None,
+                                    defaults=[])
+            dead.append(ast.Expr(value=ast.Lambda(args=no_args, body=names)))
+        if code.co_flags & (CO_GENERATOR | CO_ASYNC_GENERATOR) and not _yields(stmts):
+            # a generator whose 'yield' is unreachable
+            dead.append(ast.Expr(value=ast.Yield(value=None)))
+        if dead:
+            result.append(ast.If(test=ast.Constant(value=False), body=dead, orelse=[]))
+        return result
 
     def _class_body(self, walker, stmts):
         # every class body starts with '__module__ = __name__' and '__qualname__ = ...'
@@ -137,8 +169,11 @@ class Decompiler:
 
     def _module_body(self, walker, stmts):
         stmts = _docstring_first(stmts)
-        head = [s for s in stmts[:1] if _is_docstring(s)]
-        return head + self._declarations(walker, 'module') + stmts[len(head):]
+        # declarations go after the docstring and the 'from __future__' imports, which must come first
+        count = 1 if stmts[:1] and _is_docstring(stmts[0]) else 0
+        while count < len(stmts) and isinstance(stmts[count], ast.ImportFrom) and stmts[count].module == '__future__':
+            count += 1
+        return stmts[:count] + self._declarations(walker, 'module') + stmts[count:]
 
     @staticmethod
     def _declarations(walker, kind) -> List[ast.stmt]:
@@ -152,6 +187,13 @@ class Decompiler:
             elif node.opname in _NONLOCAL_OPS and node.argval in free and node.argval not in nonlocal_names:
                 nonlocal_names.append(node.argval)
         if kind == 'function':
+            # An assignment expression inside a comprehension binds its target in the function.
+            # The store instruction is in the comprehension's code, the declaration belongs here.
+            for op, name in _comprehension_stores(walker.code):
+                if op == 'STORE_GLOBAL' and name not in global_names:
+                    global_names.append(name)
+                elif op == 'STORE_DEREF' and name in free and name not in nonlocal_names:
+                    nonlocal_names.append(name)
             # a free variable no instruction uses can only come from a 'nonlocal' statement
             used = {node.argval for node in walker.graph.nodes
                     if node.opname in ('LOAD_DEREF', 'STORE_DEREF', 'DELETE_DEREF', 'LOAD_CLOSURE', 'LOAD_CLASSDEREF')}
@@ -191,6 +233,17 @@ def _looks_optimized(code: CodeType) -> bool:
 
 
 # -- helpers --------------------------------------------------------------------
+def _comprehension_stores(code: CodeType):
+    """(opname, name) of the stores to outer variables in the comprehensions of ``code``."""
+    import dis
+    for const in code.co_consts:
+        if isinstance(const, CodeType) and const.co_name in ('<listcomp>', '<setcomp>', '<dictcomp>', '<genexpr>'):
+            for instr in dis.get_instructions(const):
+                if instr.opname in ('STORE_GLOBAL', 'STORE_DEREF'):
+                    yield instr.opname, instr.argval
+            yield from _comprehension_stores(const)
+
+
 def _is_assign(stmt, name: str) -> bool:
     return (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
             and stmt.targets[0].id == name)

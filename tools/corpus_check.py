@@ -22,6 +22,7 @@ import os
 import re
 import sys
 import time
+import tokenize
 from types import CodeType
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
@@ -52,12 +53,8 @@ def normalise(reason: str) -> str:
 def children_of(code: CodeType):
     """Nested code objects in the order the canonical dump lists them."""
     from decompiler.graph.builder import build_graph
-    seen, result = set(), []
-    for node in build_graph(code).nodes:
-        if node.opname == 'LOAD_CONST' and isinstance(node.argval, CodeType) and id(node.argval) not in seen:
-            seen.add(id(node.argval))
-            result.append(node.argval)
-    return result
+    return [node.argval for node in build_graph(code).nodes
+            if node.opname == 'LOAD_CONST' and isinstance(node.argval, CodeType)]
 
 
 def own_dump(code: CodeType) -> str:
@@ -94,8 +91,12 @@ def check_file(args):
     result = {'path': path, 'objects': 0, 'bad': [], 'fatal': None, 'seconds': 0.0}
     started = time.time()
     try:
-        with open(path, encoding='utf-8') as f:
-            source = f.read()
+        try:
+            with tokenize.open(path) as f:  # honours the coding declaration
+                source = f.read()
+        except (SyntaxError, UnicodeDecodeError):
+            result['fatal'] = 'skipped: cannot be read'
+            return result
         compiler = compile_without_peephole if nopeephole else (lambda src, flags=0: compile_source(src, path, flags))
         try:
             code = compiler(source)

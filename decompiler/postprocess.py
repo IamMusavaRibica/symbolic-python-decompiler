@@ -46,8 +46,10 @@ def _expand_constant_display(node: ast.AST) -> None:
     if isinstance(node, ast.List) and isinstance(inner, ast.Constant) and isinstance(inner.value, tuple) \
             and len(inner.value) >= 3:
         node.elts = [const_to_ast(v, True) for v in inner.value]
-    elif isinstance(node, ast.Set) and isinstance(inner, ConstSet) and len(inner.elts) >= 3:
-        node.elts = list(inner.elts)
+    elif isinstance(node, ast.Set) and isinstance(inner, ConstSet) and inner.elts:
+        # (the display had at least three elements; equal ones collapsed when it was folded)
+        elts = list(inner.elts)
+        node.elts = elts + [elts[0]] * (3 - len(elts))
 
 
 def _fix(node: ast.AST) -> ast.AST:

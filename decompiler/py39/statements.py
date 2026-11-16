@@ -155,6 +155,10 @@ class StatementMixin:
             raise DecompileError(f'POP_TOP discards {value!r}', node)
         if st.depth != 0:
             raise DecompileError('value discarded in the middle of an expression', node)
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            # A plain string statement produces no code (or is a docstring).  Code for one
+            # means it was an f-string without replacement fields.
+            value = ast.JoinedStr(values=[value])
         st.emit(ast.Expr(value=value))
 
     def op_PRINT_EXPR(self, node, st):

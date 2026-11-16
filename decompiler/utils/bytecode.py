@@ -48,7 +48,7 @@ class _CompileServer:
                                         stderr=subprocess.DEVNULL, text=True, encoding='ascii')
 
     def compile(self, source: str, flags: int) -> CodeType:
-        line = base64.b64encode(source.encode('utf-8')).decode('ascii')
+        line = base64.b64encode((source or '\n').encode('utf-8')).decode('ascii')
         self.process.stdin.write(f'{line} {flags}\n')
         self.process.stdin.flush()
         reply = self.process.stdout.readline().strip()

@@ -273,6 +273,27 @@ def const_to_ast(value, expand_tuples: bool = False) -> ast.expr:
         # written as '-<literal>' (the compiler folds it back), so that it gets parentheses
         # where it needs them: (-1) ** x, (-1).real
         return ast.UnaryOp(op=ast.USub(), operand=ast.Constant(value=-value))
-    if type(value) is complex and value.real == 0 and math.copysign(1, value.real) < 0:
-        return ast.UnaryOp(op=ast.USub(), operand=ast.Constant(value=-value))
+    if type(value) is complex:
+        return _complex_to_ast(value)
     return ast.Constant(value=value)
+
+
+def _complex_to_ast(value: complex) -> ast.expr:
+    """An expression of literals that the compiler folds to exactly ``value``, signed zeros included."""
+    negative = lambda x: math.copysign(1, x) < 0
+    real, imag = value.real, value.imag
+    if real == 0 and not negative(real):
+        if not negative(imag):
+            return ast.Constant(value=complex(0.0, imag))  # 2j
+        # 0.0 - 2j
+        return ast.BinOp(left=ast.Constant(value=0.0), op=ast.Sub(), right=ast.Constant(value=complex(0.0, -imag)))
+    if real == 0:
+        if negative(imag):
+            return ast.UnaryOp(op=ast.USub(), operand=ast.Constant(value=complex(0.0, -imag)))  # -2j
+        # -(0.0 - 2j)
+        return ast.UnaryOp(op=ast.USub(), operand=_complex_to_ast(complex(0.0, -imag)))
+    if imag == 0 and negative(imag):
+        # -(-1.0 + 0j)
+        return ast.UnaryOp(op=ast.USub(), operand=_complex_to_ast(complex(-real, 0.0)))
+    op = ast.Sub() if negative(imag) else ast.Add()
+    return ast.BinOp(left=const_to_ast(real), op=op, right=ast.Constant(value=complex(0.0, abs(imag))))
