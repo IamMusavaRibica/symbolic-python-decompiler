@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import math
 from types import CodeType
 
 from decompiler.errors import DecompileError
@@ -35,6 +36,12 @@ class ExpressionMixin:
         if isinstance(value, frozenset):
             elts = [self.const(v) for v in sorted(value, key=const_key)]
             return ConstSet(elts=elts)
+        if type(value) in (int, float) and math.copysign(1, value) < 0:
+            # written as '-<literal>' (the compiler folds it back), so that it gets parentheses
+            # where it needs them: (-1) ** x, (-1).real
+            return ast.UnaryOp(op=ast.USub(), operand=ast.Constant(value=-value))
+        if type(value) is complex and value.real == 0 and math.copysign(1, value.real) < 0:
+            return ast.UnaryOp(op=ast.USub(), operand=ast.Constant(value=-value))
         return ast.Constant(value=value)
 
     def op_LOAD_CONST(self, node, st):

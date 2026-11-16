@@ -21,6 +21,16 @@ def negate(test: ast.expr) -> ast.expr:
     return ast.UnaryOp(op=ast.Not(), operand=test)
 
 
+def negatable(test: ast.expr) -> bool:
+    """False when ``not test`` would not compile to the same test with the jump reversed.
+
+    The compiler rewrites ``not (a is b)`` to ``a is not b`` (same for ``in``),
+    which changes the instruction; such a test can only be used the way it is.
+    """
+    return not (isinstance(test, ast.Compare) and len(test.ops) == 1
+                and isinstance(test.ops[0], (ast.Is, ast.IsNot, ast.In, ast.NotIn)))
+
+
 def bool_op(op_type, left: ast.expr, right: ast.expr) -> ast.BoolOp:
     """``left op right``, written as one flat operation when an operand already is one.
 
@@ -115,9 +125,20 @@ class ControlMixin:
                         cond.true, cond.keep_true = sub.true, sub.keep_true
                         changed = True
                     elif sub.true is cond.false and not (sub.keep_true or sub.keep_false or cond.keep_false):
-                        cond.test = bool_op(ast.And, cond.test, negate(sub.test))
-                        cond.true = sub.false
-                        changed = True
+                        # 'cond and not sub' or, seen from the other side, 'not cond or sub': take the
+                        # one that reads naturally (its true side is where the last jump falls through to)
+                        forms = ['and-not', 'not-or'] if sub.last.opname == 'POP_JUMP_IF_TRUE' else ['not-or', 'and-not']
+                        for form in forms:
+                            if form == 'and-not' and negatable(sub.test):
+                                cond.test = bool_op(ast.And, cond.test, negate(sub.test))
+                                cond.true = sub.false
+                                changed = True
+                                break
+                            if form == 'not-or' and negatable(cond.test):
+                                cond.test = bool_op(ast.Or, negate(cond.test), sub.test)
+                                cond.true, cond.false = cond.false, sub.false
+                                changed = True
+                                break
                     if changed:
                         cond.nodes |= sub.nodes
                         cond.last = sub.last
@@ -131,9 +152,19 @@ class ControlMixin:
                         cond.false, cond.keep_false = sub.false, sub.keep_false
                         changed = True
                     elif sub.false is cond.true and not (sub.keep_true or sub.keep_false or cond.keep_true):
-                        cond.test = bool_op(ast.Or, cond.test, negate(sub.test))
-                        cond.false = sub.true
-                        changed = True
+                        # 'cond or not sub' or 'not cond and sub'
+                        forms = ['or-not', 'not-and'] if sub.last.opname == 'POP_JUMP_IF_TRUE' else ['not-and', 'or-not']
+                        for form in forms:
+                            if form == 'or-not' and negatable(sub.test):
+                                cond.test = bool_op(ast.Or, cond.test, negate(sub.test))
+                                cond.false = sub.true
+                                changed = True
+                                break
+                            if form == 'not-and' and negatable(cond.test):
+                                cond.test = bool_op(ast.And, negate(cond.test), sub.test)
+                                cond.true, cond.false = sub.true, cond.true
+                                changed = True
+                                break
                     if changed:
                         cond.nodes |= sub.nodes
                         cond.last = sub.last
@@ -147,7 +178,7 @@ class ControlMixin:
                                                                or no.keep_true or no.keep_false):
                     if yes.true is no.true and yes.false is no.false:
                         cond.test = ast.IfExp(test=cond.test, body=yes.test, orelse=no.test)
-                    elif yes.true is no.false and yes.false is no.true:
+                    elif yes.true is no.false and yes.false is no.true and negatable(no.test):
                         cond.test = ast.IfExp(test=cond.test, body=yes.test, orelse=negate(no.test))
                     else:
                         continue
@@ -276,11 +307,15 @@ class ControlMixin:
                 raise DecompileError('unsupported conditional', cond.last)
             st.emit(ast.If(test=cond.test, body=[ast.Pass()], orelse=[]))
             return cond.true
-        if statement and cond.false.opname == 'LOAD_ASSERTION_ERROR' and self.owned(cond.false, cond.nodes):
-            return self.parse_assert(cond, st)
+        if statement:
+            # assert test: the failing side raises AssertionError ('assert not x' fails on the true side)
+            if cond.false.opname == 'LOAD_ASSERTION_ERROR' and self.owned(cond.false, cond.nodes):
+                return self.parse_assert(cond.test, cond.false, cond.true, st)
+            if cond.true.opname == 'LOAD_ASSERTION_ERROR' and self.owned(cond.true, cond.nodes):
+                return self.parse_assert(negate(cond.test), cond.true, cond.false, st)
 
         # the side reached by falling through the last jump is what the source calls the body
-        if cond.last.opname == 'POP_JUMP_IF_TRUE':
+        if cond.last.opname == 'POP_JUMP_IF_TRUE' and negatable(cond.test):
             test, first, second = negate(cond.test), cond.false, cond.true
         else:
             test, first, second = cond.test, cond.true, cond.false
@@ -320,22 +355,29 @@ class ControlMixin:
             st.emit(ast.If(test=test, body=body.stmts, orelse=[]))
             st.stmts.extend(orelse.stmts)
         elif not body.stmts and orelse.stmts:
-            st.emit(ast.If(test=negate(test), body=orelse.stmts, orelse=[]))
+            loop = ctx.loop
+            if negatable(test):
+                st.emit(ast.If(test=negate(test), body=orelse.stmts, orelse=[]))
+            elif loop is not None and after is loop.header:
+                st.emit(ast.If(test=test, body=[ast.Continue()], orelse=[]))
+                st.stmts.extend(orelse.stmts)
+            else:
+                st.emit(ast.If(test=test, body=[ast.Pass()], orelse=orelse.stmts))
         else:
             st.emit(ast.If(test=test, body=body.stmts or [ast.Pass()], orelse=orelse.stmts))
         return after if after is not None else TERMINATED
 
-    def parse_assert(self, cond: Cond, st: State):
-        failed = self.parse_block(cond.false, st.stack, st.ctx.evolve(start=cond.false))
+    def parse_assert(self, test: ast.expr, failing: InstructionNode, passing: InstructionNode, st: State):
+        failed = self.parse_block(failing, st.stack, st.ctx.evolve(start=failing))
         if failed.terminated and len(failed.stmts) == 1 and isinstance(failed.stmts[0], ast.Raise):
             exc = failed.stmts[0].exc
             if isinstance(exc, AssertionErrorValue):
-                st.emit(ast.Assert(test=cond.test, msg=None))
-                return cond.true
-            if isinstance(exc, ast.Call) and isinstance(exc.func, AssertionErrorValue) and len(exc.args) == 1:
-                st.emit(ast.Assert(test=cond.test, msg=exc.args[0]))
-                return cond.true
-        raise DecompileError('unsupported assert', cond.false)
+                st.emit(ast.Assert(test=test, msg=None))
+                return passing
+            if isinstance(exc, ast.Call) and isinstance(exc.func, AssertionErrorValue) and len(exc.args) == 1                     and not exc.keywords:
+                st.emit(ast.Assert(test=test, msg=exc.args[0]))
+                return passing
+        raise DecompileError('unsupported assert', failing)
 
     # -- loops ------------------------------------------------------------------------------
     def parse_spin(self, node, st: State):
@@ -357,7 +399,7 @@ class ControlMixin:
             inside_true, inside_false = cond.true in loop.nodes, cond.false in loop.nodes
             if inside_true and not inside_false:
                 test, start, normal_exit = cond.test, cond.true, cond.false
-            elif inside_false and not inside_true:
+            elif inside_false and not inside_true and negatable(cond.test):
                 test, start, normal_exit = negate(cond.test), cond.false, cond.true
         if normal_exit is not None:
             owners = cond.nodes

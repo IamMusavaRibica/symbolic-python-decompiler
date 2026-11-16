@@ -38,12 +38,28 @@ def _walker_class():
     return Walker
 
 
+#: name of the call that stands in for a function or class body that could not be decompiled
+FAILURE_MARKER = '__decompilation_failed__'
+
+
 class Decompiler:
-    def __init__(self, code: CodeType, toplevel: bool = True):
+    """Decompiles one code object (normally that of a module).
+
+    With ``strict`` (the default) the first problem raises DecompileError.
+    Without it, a function or class body that cannot be decompiled is replaced
+    by a call to ``__decompilation_failed__('reason')`` so that the rest of the
+    module is still produced; ``failures`` lists what was skipped.
+    """
+
+    def __init__(self, code: CodeType, toplevel: bool = True, strict: bool = True):
         self.code = code
         self.toplevel = toplevel
+        self.strict = strict
         self.tree: ast.Module = None
+        #: (qualified name of the code object, error) for every body that was skipped
+        self.failures: List[tuple] = []
         self._walker_class = _walker_class()
+        self._path: List[str] = []
 
     # -- public ----------------------------------------------------------------
     def decompile(self) -> ast.Module:
@@ -62,6 +78,23 @@ class Decompiler:
     # -- used by the walkers -----------------------------------------------------
     def body_of(self, code: CodeType, kind: str) -> List[ast.stmt]:
         """The statements of a code object; ``kind`` says what the code object is the body of."""
+        self._path.append(code.co_name)
+        try:
+            return self._body_of(code, kind)
+        except Exception as e:
+            if self.strict or kind not in ('function', 'class') or len(self._path) == 1:
+                raise
+            if not isinstance(e, (DecompileError, RecursionError)):
+                e = DecompileError(f'internal error: {type(e).__name__}: {e}')
+            self.failures.append(('.'.join(self._path), e))
+            logger.warning('skipped {}: {}', '.'.join(self._path), e)
+            reason = ast.Constant(value=str(e))
+            return [ast.Expr(value=ast.Call(func=ast.Name(id=FAILURE_MARKER, ctx=ast.Load()), args=[reason],
+                                            keywords=[]))]
+        finally:
+            self._path.pop()
+
+    def _body_of(self, code: CodeType, kind: str) -> List[ast.stmt]:
         walker = self._walker_class(self, code, kind)
         logger.debug('decompiling {} {}', kind, code.co_name)
         stmts = walker.run()
@@ -114,6 +147,13 @@ class Decompiler:
                 global_names.append(node.argval)
             elif node.opname in _NONLOCAL_OPS and node.argval in free and node.argval not in nonlocal_names:
                 nonlocal_names.append(node.argval)
+        if kind == 'function':
+            # a free variable no instruction uses can only come from a 'nonlocal' statement
+            used = {node.argval for node in walker.graph.nodes
+                    if node.opname in ('LOAD_DEREF', 'STORE_DEREF', 'DELETE_DEREF', 'LOAD_CLOSURE', 'LOAD_CLASSDEREF')}
+            for name in walker.code.co_freevars:
+                if name not in used and name != '__class__' and name not in nonlocal_names:
+                    nonlocal_names.append(name)
         result: List[ast.stmt] = []
         if global_names:
             result.append(ast.Global(names=global_names))

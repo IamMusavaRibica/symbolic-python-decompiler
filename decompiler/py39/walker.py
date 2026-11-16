@@ -190,7 +190,9 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             return None
         if index < 0:
             # every frame block is closed: 'return <constant>'
+            # (the compiler emits these two instructions for one 'return' only: nothing else leads to them)
             if node.opname == 'LOAD_CONST' and node.next is not None and node.next.opname == 'RETURN_VALUE' \
+                    and len(node.preds) == 1 and len(node.next.preds) == 1 \
                     and self.kind in ('function', 'lambda', 'comprehension'):
                 return [self.make_return(self.const(node.argval))]
             return None
