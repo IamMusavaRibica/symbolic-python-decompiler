@@ -167,6 +167,13 @@ class DefinitionMixin:
                                                     ifs=[], is_async=0))
                 stmts = stmts[1:]
                 continue
+            if len(stmts) > 1 and isinstance(stmts[0], ast.If) and not stmts[0].orelse and generators \
+                    and len(stmts[0].body) == 1 and isinstance(stmts[0].body[0], ast.Pass):
+                # a test whose outcome does not matter: 'if (test or True)'
+                always = ast.BoolOp(op=ast.Or(), values=[stmts[0].test, ast.Constant(value=True)])
+                generators[-1].ifs.append(always)
+                stmts = stmts[1:]
+                continue
             if len(stmts) != 1:
                 break
             stmt = stmts[0]

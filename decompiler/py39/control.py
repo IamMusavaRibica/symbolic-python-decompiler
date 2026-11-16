@@ -422,9 +422,11 @@ class ControlMixin:
         cond = self.try_condition(header, stack, len(stack) + 1, ctx, entering=True)
         if cond is not None and not cond.keep_true and not cond.keep_false:
             inside_true, inside_false = cond.true in loop.nodes, cond.false in loop.nodes
-            if inside_true and not inside_false:
+            # ('assert x' at the start of the body leaves the loop too, but it is no loop test)
+            if inside_true and not inside_false and cond.false.opname != 'LOAD_ASSERTION_ERROR':
                 test, start, normal_exit = cond.test, cond.true, cond.false
-            elif inside_false and not inside_true and negatable(cond.test):
+            elif inside_false and not inside_true and negatable(cond.test) \
+                    and cond.true.opname != 'LOAD_ASSERTION_ERROR':
                 test, start, normal_exit = negate(cond.test), cond.false, cond.true
         self.find_break_target(fb, normal_exit, cond.nodes if normal_exit is not None else ())
         if not guess_target:

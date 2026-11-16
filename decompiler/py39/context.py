@@ -77,6 +77,7 @@ class FinallyTryBlock(FBlock):
     def __init__(self, entry: InstructionNode, terminal: Optional[InstructionNode]):
         self.entry = entry  # first instruction of the exception-path copy
         self.terminal = terminal  # the RERAISE that ends that copy (None: the body never completes)
+        self.copy_nodes = set()  # the nodes of the inlined copy that was skipped last
 
     def unwind(self, walker, node, preserve_tos):
         node = follow(node, 'POP_BLOCK')

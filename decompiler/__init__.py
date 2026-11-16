@@ -17,6 +17,7 @@ from typing import List
 
 from loguru import logger
 
+from decompiler.emit import keep_on_one_line, peephole_skipped
 from decompiler.errors import DecompileError
 from decompiler.graph.dump import (CO_ASYNC_GENERATOR, CO_GENERATOR, docstring_of, dump_code)
 
@@ -103,11 +104,14 @@ class Decompiler:
         logger.debug('decompiling {} {}', kind, code.co_name)
         stmts = walker.run()
         if kind == 'function':
-            return self._function_body(code, walker, stmts)
-        if kind == 'class':
-            return self._class_body(walker, stmts)
-        if kind == 'module':
-            return self._module_body(walker, stmts)
+            stmts = self._function_body(code, walker, stmts)
+        elif kind == 'class':
+            stmts = self._class_body(walker, stmts)
+        elif kind == 'module':
+            stmts = self._module_body(walker, stmts)
+        if self.peephole and peephole_skipped(code):
+            # compiled from a line so long that the optimizer gave up: it has to stay that long
+            keep_on_one_line(stmts)
         return stmts
 
     def _function_body(self, code, walker, stmts):

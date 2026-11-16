@@ -183,3 +183,184 @@ def _parse_flags(source, state, char):
         state.flags |= add_flags
         return None
     return add_flags
+
+# %% while true: the code after the loop among several joins
+def consume_optional(action, explicit_arg, arg_count, chars):
+    action_tuples = []
+    while True:
+        if action is None:
+            return 1
+        if explicit_arg is not None:
+            if arg_count == 0 and explicit_arg not in chars:
+                action_tuples.append(action)
+                action = explicit_arg
+            elif arg_count == 1:
+                stop = 1
+                action_tuples.append(action)
+                break
+            else:
+                raise ArgumentError(action)
+        else:
+            stop = 2
+            action_tuples.append(action)
+            break
+    assert action_tuples
+    for action in action_tuples:
+        take_action(action)
+    return stop
+
+# %% while true: breaks after statements in compound-condition bodies
+def fetch(self, pointer, nhist, prefix):
+    while 1:
+        pointer += 1
+        if pointer < 0 or pointer >= nhist:
+            self.bell()
+            if not self.cyclic and pointer < 0:
+                return
+            else:
+                pointer = prefix = None
+            break
+        item = self.history[pointer]
+        if item[:2] == prefix and len(item) > 2:
+            self.insert(item)
+            break
+    self.see('insert')
+    self.pointer = pointer
+
+# %% continue inside with inside try inside for
+def read_registry(self, keys):
+    for name in keys:
+        try:
+            with open_key(name) as subkey:
+                if not name.startswith('.'):
+                    continue
+                mimetype, datatype = query(subkey)
+                if datatype != 1:
+                    continue
+                self.add_type(mimetype, name)
+        except OSError:
+            continue
+
+# %% handlers that fall through to a break
+def next_member(self):
+    while True:
+        try:
+            tarinfo = self.fromtarfile()
+        except EOFHeaderError as e:
+            if self.ignore_zeros:
+                self.offset += 1
+                continue
+        except InvalidHeaderError as e:
+            if self.ignore_zeros:
+                self.offset += 1
+                continue
+            elif self.offset == 0:
+                raise ReadError(str(e))
+        except EmptyHeaderError:
+            if self.offset == 0:
+                raise ReadError('empty file')
+        break
+    if tarinfo is not None:
+        self.members.append(tarinfo)
+    return tarinfo
+
+# %% return in a try body whose handler falls through, with finally
+def _is_ipv6_enabled():
+    if socket.has_ipv6:
+        sock = None
+        try:
+            sock = socket.socket(1, 2)
+            return True
+        except OSError:
+            pass
+        finally:
+            if sock:
+                sock.close()
+    return False
+
+# %% assert at the start of a while true loop
+def all_sorts(G, D, count):
+    while True:
+        assert all(count[v] == 0 for v in D)
+        if len(D) == len(G):
+            yield list(D)
+        for j in G:
+            count[j] += 1
+            assert count[j] >= 0
+        if not D:
+            break
+
+# %% complex constants with signed zeros
+a = 1j
+b = -1j
+c = 0 - 1j
+d = -(1 + 0j)
+e = 1 + 2j
+f = 1 - 2j
+g = -(0 - 2j)
+
+# %% f-string without fields as a statement
+def f():
+    f'Not a docstring'
+def g():
+    """A docstring"""
+    f'x'
+
+# %% comprehension that binds a name to a single value
+x = [y * 2 for z in data for y in [g(z)] if y]
+t = {k: v for item in data for (k, v) in [item]}
+u = ', '.join(read(p) for p in paths if (check(p) or True) and isfile(p))
+
+# %% assignment expression in a comprehension with declared targets
+def f(data):
+    global G
+    return [(G := x) for x in data]
+def outer():
+    n = None
+    def g(data):
+        nonlocal n
+        return [(n := x) for x in data]
+    return g
+h = [(M := x) for x in data]
+
+# %% scope facts decided by code that produces no bytecode
+def cells(self):
+    if 0:
+        def inner():
+            return self
+    return self
+def local_without_binding():
+    return x
+    x = 1
+def cell_bound_later(a):
+    if 0:
+        b = 1
+        def inner():
+            return a, b
+    return a
+
+# %% set of equal constants
+s = {1, 1.0, True}
+t = {1, 2, 3}
+u = {'a', 'a', 'a', 'b'}
+
+# %% equal lambdas on different lines
+table = {
+    'a': lambda x: x,
+    'b': lambda x: x,
+    'c': lambda x: x + 1,
+}
+
+# %% a statement too long for one line
+names = [alpha_0, alpha_1, alpha_2, alpha_3, alpha_4, alpha_5, alpha_6, alpha_7, alpha_8, alpha_9, alpha_10, alpha_11, alpha_12, alpha_13, alpha_14, alpha_15, alpha_16, alpha_17, alpha_18, alpha_19, alpha_20, alpha_21, alpha_22, alpha_23, alpha_24, alpha_25, alpha_26, alpha_27, alpha_28, alpha_29, alpha_30, alpha_31, alpha_32, alpha_33, alpha_34, alpha_35, alpha_36, alpha_37, alpha_38, alpha_39, alpha_40, alpha_41, alpha_42, alpha_43, alpha_44, alpha_45, alpha_46, alpha_47, alpha_48, alpha_49, alpha_50, alpha_51, alpha_52, alpha_53, alpha_54, alpha_55, alpha_56, alpha_57, alpha_58, alpha_59, alpha_60, alpha_61, alpha_62, alpha_63, alpha_64, alpha_65, alpha_66, alpha_67, alpha_68, alpha_69, alpha_70, alpha_71, alpha_72, alpha_73, alpha_74, alpha_75, alpha_76, alpha_77, alpha_78, alpha_79, alpha_80, alpha_81, alpha_82, alpha_83, alpha_84, alpha_85, alpha_86, alpha_87, alpha_88, alpha_89, alpha_90, alpha_91, alpha_92, alpha_93, alpha_94, alpha_95, alpha_96, alpha_97, alpha_98, alpha_99, alpha_100, alpha_101, alpha_102, alpha_103, alpha_104, alpha_105, alpha_106, alpha_107, alpha_108, alpha_109, alpha_110, alpha_111, alpha_112, alpha_113, alpha_114, alpha_115, alpha_116, alpha_117, alpha_118, alpha_119, alpha_120, alpha_121, alpha_122, alpha_123, alpha_124, alpha_125, alpha_126, alpha_127, alpha_128, alpha_129, alpha_130, alpha_131, alpha_132, alpha_133, alpha_134, alpha_135, alpha_136, alpha_137, alpha_138, alpha_139]
+def later(a=(1, 2), b=None):
+    return x if a else y
+
+# %% global statement in a module with future imports
+"""docstring"""
+from __future__ import annotations
+import os
+def f():
+    return cache
+global cache
+cache = {}

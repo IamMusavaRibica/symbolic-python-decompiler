@@ -203,17 +203,22 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             return [ast.Break()] if node is fb.break_target else None
         return self._resolve(node, len(ctx.fblocks) - 1, ctx, False, entry=True)
 
-    def _resolve(self, node, index: int, ctx: Ctx, past_loop: bool, after_copy: bool = False, entry: bool = False):
-        """``after_copy``: ``node`` follows an inlined finally body (so several of its paths may end there)."""
+    def _resolve(self, node, index: int, ctx: Ctx, past_loop: bool, after_copy=None, entry: bool = False):
+        """``after_copy``: ``node`` follows an inlined finally body, whose nodes these are
+        (several paths of that body may end at ``node``)."""
         if node is None or node is TERMINATED:
             return None
         # clean-up code that other code runs as well is not the clean-up code of a jump statement
-        exclusive = entry or after_copy or len(node.preds) == 1
+        if after_copy is not None:
+            unshared = all(p in after_copy for p, _ in node.preds)
+        else:
+            unshared = len(node.preds) == 1
+        exclusive = entry or unshared
         if index < 0:
             # every frame block is closed: 'return <constant>'
             # (the compiler emits these two instructions for one 'return' only: nothing else leads to them)
             if node.opname == 'LOAD_CONST' and node.next is not None and node.next.opname == 'RETURN_VALUE' \
-                    and (len(node.preds) == 1 or after_copy) and len(node.next.preds) == 1 \
+                    and unshared and len(node.next.preds) == 1 \
                     and self.kind in ('function', 'lambda', 'comprehension'):
                 return [self.make_return(self.const(node.argval))]
             return None
@@ -241,7 +246,8 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         after = fb.unwind(self, node, False)
         if after is None or after is TERMINATED or (after is not node and not exclusive):
             return None
-        return self._resolve(after, index - 1, ctx, past_loop, isinstance(fb, FinallyTryBlock))
+        return self._resolve(after, index - 1, ctx, past_loop,
+                             fb.copy_nodes if isinstance(fb, FinallyTryBlock) else None)
 
     def close_block(self, block: Block, ctx: Ctx, accept=()) -> None:
         """Make sure ``block`` ends in a way its construct expects.
@@ -281,6 +287,7 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         copies differ leave the finally body for good (their clean-up code
         differs) and are not followed.  TERMINATED when the body never completes.
         """
+        fb.copy_nodes = set()
         if fb.terminal is None:
             return TERMINATED
         seen = {}
@@ -298,6 +305,7 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             if canon in seen:
                 continue
             seen[canon] = copy
+            fb.copy_nodes.add(copy)
             if not self._same_instruction(canon, copy):
                 continue
             for label, succ in canon.successors():
