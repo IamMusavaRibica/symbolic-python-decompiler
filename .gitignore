@@ -2,3 +2,8 @@
 .idea/**
 _graphs/
 .venv/
+
+# reference CPython source tarball
+Python-*.tgz
+__pycache__/
+*.pyc
