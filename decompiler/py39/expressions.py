@@ -2,14 +2,12 @@
 from __future__ import annotations
 
 import ast
-import math
-from types import CodeType
+import keyword
 
 from decompiler.errors import DecompileError
-from decompiler.graph.dump import const_key
 from decompiler.py39.values import (Accumulator, AssertionErrorValue, AwaitableValue, BuildClass, ClassValue,
-                                    ClosureCell, CodeValue, ConstSet, FStringPart, FunctionValue, InplaceValue,
-                                    IterValue, MethodValue, YieldFromIter, is_plain)
+                                    ClosureCell, FStringPart, FunctionValue, InplaceValue,
+                                    IterValue, MethodValue, YieldFromIter, const_to_ast, is_plain)
 
 BINARY_OPS = {
     'ADD': ast.Add, 'SUBTRACT': ast.Sub, 'MULTIPLY': ast.Mult, 'TRUE_DIVIDE': ast.Div,
@@ -27,22 +25,17 @@ COMPARE_OPS = {
 CONVERSIONS = {0: -1, 1: ord('s'), 2: ord('r'), 3: ord('a')}
 
 
+def _is_keyword_name(key) -> bool:
+    """True when the dict key can be written as the name of a keyword argument."""
+    return (isinstance(key, ast.Constant) and isinstance(key.value, str) and key.value.isidentifier()
+            and not keyword.iskeyword(key.value))
+
+
 class ExpressionMixin:
     # -- constants and names ---------------------------------------------------
     def const(self, value) -> ast.expr:
         """The expression that loads the constant ``value``."""
-        if isinstance(value, CodeType):
-            return CodeValue(value)
-        if isinstance(value, frozenset):
-            elts = [self.const(v) for v in sorted(value, key=const_key)]
-            return ConstSet(elts=elts)
-        if type(value) in (int, float) and math.copysign(1, value) < 0:
-            # written as '-<literal>' (the compiler folds it back), so that it gets parentheses
-            # where it needs them: (-1) ** x, (-1).real
-            return ast.UnaryOp(op=ast.USub(), operand=ast.Constant(value=-value))
-        if type(value) is complex and value.real == 0 and math.copysign(1, value.real) < 0:
-            return ast.UnaryOp(op=ast.USub(), operand=ast.Constant(value=-value))
-        return ast.Constant(value=value)
+        return const_to_ast(value)
 
     def op_LOAD_CONST(self, node, st):
         st.push(self.const(node.argval))
@@ -205,7 +198,7 @@ class ExpressionMixin:
     def _dict_update(self, node, st):
         value = self.pop_expr(st, node)
         index, target = self._container(node, st, ast.Dict)
-        if type(value) is ast.Dict and value.keys and None not in value.keys:
+        if node.opname == 'DICT_UPDATE' and type(value) is ast.Dict and value.keys and None not in value.keys:
             # '{**a, k: v}': the pairs after an unpacking are built as their own dict and merged in
             st.stack[index] = ast.Dict(keys=target.keys + value.keys, values=target.values + value.values)
         else:
@@ -279,16 +272,30 @@ class ExpressionMixin:
 
     def op_CALL_FUNCTION_EX(self, node, st):
         keywords = []
+        groups = []  # (start, end, dict display) of keywords that could also be written '**{...}'
         if node.arg & 1:
             mapping = self.pop_expr(st, node)
-            if type(mapping) is ast.Dict:
+            if type(mapping) is ast.Dict and all(k is None or _is_keyword_name(k) for k in mapping.keys):
+                # keyword arguments are collected in a dict; '**x' arguments are merged into it
+                start = 0
                 for key, value in zip(mapping.keys, mapping.values):
-                    if key is None:
-                        keywords.append(ast.keyword(arg=None, value=value))
-                    elif isinstance(key, ast.Constant) and isinstance(key.value, str):
+                    if key is not None:
                         keywords.append(ast.keyword(arg=key.value, value=value))
+                    elif type(value) is ast.Dict and value.keys and all(
+                            k is not None and _is_keyword_name(k) for k in value.keys):
+                        if len(keywords) > start:
+                            groups.append((start, len(keywords), None))
+                        start = len(keywords)
+                        keywords.extend(ast.keyword(arg=k.value, value=v) for k, v in zip(value.keys, value.values))
+                        groups.append((start, len(keywords), value))
+                        start = len(keywords)
                     else:
-                        raise DecompileError('keyword argument with a key that is not a name', node)
+                        if len(keywords) > start:
+                            groups.append((start, len(keywords), None))
+                        keywords.append(ast.keyword(arg=None, value=value))
+                        start = len(keywords)
+                if len(keywords) > start:
+                    groups.append((start, len(keywords), None))
             else:
                 keywords.append(ast.keyword(arg=None, value=mapping))
         sequence = self.pop_expr(st, node)
@@ -298,6 +305,17 @@ class ExpressionMixin:
             args = [self.const(v) for v in sequence.value]
         else:
             args = [ast.Starred(value=sequence, ctx=ast.Load())]
+        if not any(isinstance(a, ast.Starred) for a in args) and not any(k.arg is None for k in keywords):
+            # Without a '*' or '**' argument the compiler would not have used CALL_FUNCTION_EX:
+            # one of the things read as plain arguments was written with a star.
+            if groups:
+                start, end, display = groups[-1]
+                if display is None:
+                    display = ast.Dict(keys=[ast.Constant(value=k.arg) for k in keywords[start:end]],
+                                       values=[k.value for k in keywords[start:end]])
+                keywords[start:end] = [ast.keyword(arg=None, value=display)]
+            else:
+                args = [ast.Starred(value=sequence, ctx=ast.Load())]
         func = self.pop_expr(st, node)
         st.push(self.make_call(node, func, args, keywords))
 

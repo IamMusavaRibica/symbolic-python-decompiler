@@ -108,7 +108,7 @@ class ExceptionMixin:
         else:
             # Handlers that go somewhere else than the others jump (continue/break/return);
             # the one place that is not a jump is where the statement ends.
-            unresolved = [c for c in continuations if self.resolve_jump(c, ctx) is None]
+            unresolved = [c for c in continuations if self.resolve_jump(c, ctx, len(c.preds) == 1) is None]
             if len(unresolved) > 1:
                 raise DecompileError('the handlers of a try statement never meet', node)
             if unresolved:
@@ -122,7 +122,7 @@ class ExceptionMixin:
                 join = after_body
         for handler in handlers:
             if handler.after is not None and handler.after is not join:
-                jump = self.resolve_jump(handler.after, ctx)
+                jump = self.resolve_jump(handler.after, ctx, len(handler.after.preds) == 1)
                 if jump is None:
                     raise DecompileError('cannot tell where an except clause goes', handler.after)
                 handler.block.stmts.extend(jump)

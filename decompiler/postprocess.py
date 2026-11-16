@@ -17,7 +17,7 @@ from typing import List
 from decompiler.errors import DecompileError
 from decompiler.py39.definitions import ComprehensionElement
 from decompiler.py39.statements import ChainedTarget
-from decompiler.py39.values import ConstSet, FStringPart, Pseudo
+from decompiler.py39.values import ConstSet, FStringPart, Pseudo, const_to_ast
 
 LOOPS = (ast.For, ast.AsyncFor, ast.While)
 
@@ -45,7 +45,7 @@ def _expand_constant_display(node: ast.AST) -> None:
     inner = node.elts[0].value
     if isinstance(node, ast.List) and isinstance(inner, ast.Constant) and isinstance(inner.value, tuple) \
             and len(inner.value) >= 3:
-        node.elts = [ast.Constant(value=v) for v in inner.value]
+        node.elts = [const_to_ast(v, True) for v in inner.value]
     elif isinstance(node, ast.Set) and isinstance(inner, ConstSet) and len(inner.elts) >= 3:
         node.elts = list(inner.elts)
 
@@ -59,6 +59,9 @@ def _fix(node: ast.AST) -> ast.AST:
         return ast.JoinedStr(values=node.values)
     if isinstance(node, ConstSet):
         return ast.Set(elts=node.elts)
+    if isinstance(node, ast.Constant) and isinstance(node.value, tuple):
+        # written as a display so that every element is spelled the way source code spells it
+        return _walk(const_to_ast(node.value, True))
     if isinstance(node, (ast.With, ast.AsyncWith)):
         # with a: with b: ...  ==  with a, b: ...
         if len(node.body) == 1 and type(node.body[0]) is type(node):

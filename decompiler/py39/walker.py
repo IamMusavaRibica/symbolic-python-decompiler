@@ -176,13 +176,29 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         return node
 
     # -- leaving blocks early --------------------------------------------------
-    def resolve_jump(self, node: InstructionNode, ctx: Ctx) -> Optional[List[ast.stmt]]:
+    def resolve_jump(self, node: InstructionNode, ctx: Ctx, owned: bool = True) -> Optional[List[ast.stmt]]:
         """Interpret a block exit as ``break``, ``continue`` or ``return <constant>``.
 
         ``node`` is where a block stopped.  The clean-up code of the enclosing
         frame blocks is matched from the innermost one outwards; what is found
         behind it decides the statement.  None when it is none of the three.
+
+        The clean-up code of a jump statement belongs to that statement alone.
+        ``owned`` tells whether ``node`` can only be reached from the construct
+        that asks; if not, ``node`` is shared with other code and can only be
+        the *target* of a jump that needs no clean-up.
         """
+        if not owned:
+            fb = ctx.fblocks[-1] if ctx.fblocks else None
+            if fb is None or not fb.is_loop:
+                return None
+            if node is fb.header:
+                return [ast.Continue()]
+            if fb.is_for:
+                return None
+            if fb.break_target is None and node not in fb.nodes:
+                fb.break_target = node
+            return [ast.Break()] if node is fb.break_target else None
         return self._resolve(node, len(ctx.fblocks) - 1, ctx, False)
 
     def _resolve(self, node, index: int, ctx: Ctx, past_loop: bool):

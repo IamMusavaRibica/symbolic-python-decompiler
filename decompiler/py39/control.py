@@ -60,7 +60,7 @@ class Cond:
     ``keep_true`` / ``keep_false`` say that the value of the condition is left
     on the stack along that edge (``JUMP_IF_TRUE_OR_POP`` and friends).
     """
-    __slots__ = ('test', 'true', 'false', 'keep_true', 'keep_false', 'nodes', 'last', 'chain')
+    __slots__ = ('test', 'true', 'false', 'keep_true', 'keep_false', 'nodes', 'first', 'last', 'chain')
 
     def __init__(self, test, true, false, keep_true, keep_false, node, chain):
         self.test: ast.expr = test
@@ -69,6 +69,7 @@ class Cond:
         self.keep_true: bool = keep_true
         self.keep_false: bool = keep_false
         self.nodes: Set[InstructionNode] = {node}  # the conditional jumps that make up the condition
+        self.first: InstructionNode = node  # the first jump: it dominates everything the condition guards
         self.last: InstructionNode = node  # the jump whose fall-through leads to the 'body'
         #: the duplicated middle operand of a chained comparison that is still on the stack
         self.chain = chain
@@ -339,8 +340,12 @@ class ControlMixin:
 
         if body.exit is not None and orelse.exit is not None and body.exit is not orelse.exit:
             # the branches go to different places: at least one of them jumps
-            body_jump = self.resolve_jump(body.exit, ctx)
-            orelse_jump = self.resolve_jump(orelse.exit, ctx)
+            # (an exit that code outside this statement also leads to is not a jump of ours)
+            def ours(exit_node):
+                return all(self.analysis.dominates(cond.first, p) for p in self.analysis.forward_preds(exit_node))
+
+            body_jump = self.resolve_jump(body.exit, ctx, ours(body.exit))
+            orelse_jump = self.resolve_jump(orelse.exit, ctx, ours(orelse.exit))
             if body_jump is None and orelse_jump is None:
                 raise DecompileError('the branches of an if never meet', cond.last)
             if body_jump is not None:

@@ -15,6 +15,7 @@ Two families:
 from __future__ import annotations
 
 import ast
+import math
 from types import CodeType
 from typing import List, Optional
 
@@ -252,3 +253,26 @@ class ConstSet(ast.Set):
 def is_plain(value) -> bool:
     """True for a finished expression that could be written in source code as is."""
     return isinstance(value, ast.expr) and not isinstance(value, Pseudo)
+
+
+def const_to_ast(value, expand_tuples: bool = False) -> ast.expr:
+    """The expression that loads the constant ``value``.
+
+    Tuples normally stay a single ``ast.Constant`` (the stack machine looks at
+    their value); ``expand_tuples`` turns them into tuple displays, which is
+    what gets written to source code (the compiler folds them back).
+    """
+    from decompiler.graph.dump import const_key
+    if isinstance(value, CodeType):
+        return CodeValue(value)
+    if isinstance(value, frozenset):
+        return ConstSet(elts=[const_to_ast(v, expand_tuples) for v in sorted(value, key=const_key)])
+    if isinstance(value, tuple) and expand_tuples:
+        return ast.Tuple(elts=[const_to_ast(v, True) for v in value], ctx=ast.Load())
+    if type(value) in (int, float) and math.copysign(1, value) < 0:
+        # written as '-<literal>' (the compiler folds it back), so that it gets parentheses
+        # where it needs them: (-1) ** x, (-1).real
+        return ast.UnaryOp(op=ast.USub(), operand=ast.Constant(value=-value))
+    if type(value) is complex and value.real == 0 and math.copysign(1, value.real) < 0:
+        return ast.UnaryOp(op=ast.USub(), operand=ast.Constant(value=-value))
+    return ast.Constant(value=value)
