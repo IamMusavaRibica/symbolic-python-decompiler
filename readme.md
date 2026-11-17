@@ -88,8 +88,9 @@ running interpreter, and (when available) a CPython build without peephole optim
 what `compile.c` literally emits. The second one is found through `DECOMPILER_NOPEEPHOLE_PYTHON`
 (see [decompiler/utils/bytecode.py](decompiler/utils/bytecode.py), helper script: [tools/python_compile.py](tools/python_compile.py)).
 
-State of things: the standard library of 3.9 round-trips completely (641 files, 19 873 code objects); with its
-test suite and a few third-party packages added it is 89 090 of 89 095 code objects.
+State of things: the standard library of 3.9 round-trips completely (641 files, 19 873 code objects), and so do
+sympy, django, sqlalchemy, twisted, botocore, pygments, astroid and jedi (108 182 code objects). The CPython test
+suite is at 43 178 of 43 183 (the limitations below).
 
 ## Known limitations
 
