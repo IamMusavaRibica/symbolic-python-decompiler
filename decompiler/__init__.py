@@ -199,8 +199,8 @@ class Decompiler:
                                      annotation=ast.Constant(value=0), value=None, simple=0)
             previous = body[index - 1] if index else None
             if isinstance(previous, ast.Assign) and len(previous.targets) == 1 \
-                    and isinstance(previous.targets[0], (ast.Attribute, ast.Subscript)):
-                # 'x.y: ann = v' is 'x.y = v' followed by 'ann'
+                    and isinstance(previous.targets[0], (ast.Attribute, ast.Subscript, ast.Name)):
+                # 'x.y: ann = v' is 'x.y = v' followed by 'ann'; so is '(x): ann = v' for 'x = v'
                 body[index - 1] = None
                 return ast.AnnAssign(target=previous.targets[0], annotation=stmt.value, value=previous.value,
                                      simple=0)

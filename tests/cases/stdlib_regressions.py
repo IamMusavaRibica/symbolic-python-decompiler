@@ -470,3 +470,9 @@ if 1 and 1 or 1 and 1 and 1 or not 1 and 1: pass
 if None or 0: pass
 while 1 and 2:
     break
+
+# %% non-simple annotation of a plain name
+(a): print(1) = 3
+b = 2
+class C:
+    (x): f() = 1
