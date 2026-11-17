@@ -94,7 +94,7 @@ test suite and a few third-party packages added it is 89 090 of 89 095 code obje
 ## Known limitations
 
 * Unreachable code is not decompiled: the graph only contains reachable instructions, so statements after an
-  unconditional `raise` or `return` are lost (see [example.py](example.py), which stops at its first `raise`).
+  unconditional `raise` or `return` are lost (a module-level bare `raise` makes the rest of the module disappear).
   What unreachable code decided about scopes (locals, closures, generators) is restored.
 * A `while True:` loop that every path leaves with `break` has no back edge and is not a loop in the graph.
   It is written without the loop, which is not possible if one of the `break`s crosses a `finally`.
