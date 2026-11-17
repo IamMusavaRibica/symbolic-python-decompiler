@@ -109,6 +109,7 @@ class Decompiler:
             stmts = self._class_body(walker, stmts)
         elif kind == 'module':
             stmts = self._module_body(walker, stmts)
+        stmts = self._restore_annotations(walker, stmts, kind)
         if self.peephole and peephole_skipped(code):
             # compiled from a line so long that the optimizer gave up: it has to stay that long
             keep_on_one_line(stmts)
@@ -178,6 +179,50 @@ class Decompiler:
         while count < len(stmts) and isinstance(stmts[count], ast.ImportFrom) and stmts[count].module == '__future__':
             count += 1
         return stmts[:count] + self._declarations(walker, 'module') + stmts[count:]
+
+    @staticmethod
+    def _restore_annotations(walker, stmts, kind) -> List[ast.stmt]:
+        """Annotations of non-simple targets (``x.y: int``, ``(z): int``) leave almost no trace.
+
+        The target's sub-expressions and, in a module or class body, the annotation (even under
+        ``from __future__ import annotations``) are evaluated and discarded, and the body gets a
+        ``SETUP_ANNOTATIONS``.  Both are
+        restored, onto whatever statement can carry them: a discarded constant can only
+        come from an annotation (a constant statement produces no code), and a body with
+        ``SETUP_ANNOTATIONS`` but no simple annotated name had an annotated non-simple target.
+        The result is correct, but the annotation does not land where the author put it.
+        """
+        def annotated(body, index, stmt):
+            if kind == 'function':
+                # the attribute base is evaluated and discarded; the annotation is not evaluated
+                return ast.AnnAssign(target=ast.Attribute(value=stmt.value, attr='_', ctx=ast.Store()),
+                                     annotation=ast.Constant(value=0), value=None, simple=0)
+            previous = body[index - 1] if index else None
+            if isinstance(previous, ast.Assign) and len(previous.targets) == 1 \
+                    and isinstance(previous.targets[0], (ast.Attribute, ast.Subscript)):
+                # 'x.y: ann = v' is 'x.y = v' followed by 'ann'
+                body[index - 1] = None
+                return ast.AnnAssign(target=previous.targets[0], annotation=stmt.value, value=previous.value,
+                                     simple=0)
+            return ast.AnnAssign(target=ast.Name(id='_', ctx=ast.Store()), annotation=stmt.value, value=None,
+                                 simple=0)
+
+        bodies = list(_bodies(stmts))
+        for body in bodies:
+            for i, stmt in enumerate(body):
+                if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant) \
+                        and not (i == 0 and _is_docstring(stmt)):
+                    body[i] = annotated(body, i, stmt)
+        if kind != 'function' and walker.has_annotations \
+                and not any(isinstance(s, ast.AnnAssign) for body in bodies for s in body):
+            candidates = [(body, i, s) for body in bodies for i, s in enumerate(body)
+                          if isinstance(s, ast.Expr) and not (i == 0 and _is_docstring(s))]
+            pairs = [c for c in candidates if isinstance(c[0][c[1] - 1] if c[1] else None, ast.Assign)]
+            for body, i, stmt in (pairs or candidates)[:1]:
+                body[i] = annotated(body, i, stmt)
+        for body in bodies:
+            body[:] = [s for s in body if s is not None]
+        return stmts
 
     @staticmethod
     def _declarations(walker, kind) -> List[ast.stmt]:
@@ -251,6 +296,20 @@ def _comprehension_stores(code: CodeType):
 def _is_assign(stmt, name: str) -> bool:
     return (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name)
             and stmt.targets[0].id == name)
+
+
+def _bodies(stmts):
+    """The statement lists of ``stmts`` and of its compound statements, not those of nested scopes."""
+    yield stmts
+    for stmt in stmts:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        for field in ('body', 'orelse', 'finalbody'):
+            inner = getattr(stmt, field, None)
+            if isinstance(inner, list):
+                yield from _bodies(inner)
+        for handler in getattr(stmt, 'handlers', ()):
+            yield from _bodies(handler.body)
 
 
 def _is_docstring(stmt) -> bool:

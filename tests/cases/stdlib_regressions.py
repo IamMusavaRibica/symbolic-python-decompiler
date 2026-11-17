@@ -425,3 +425,48 @@ def f(A, B, a, b, c, d):
     yy = A ** 3 * a ** 9 + 3 * A ** 2 * B * a ** 6 * b ** 3 - 3 * A ** 2 * a ** 6 * c ** 3 + 9 * A ** 2 * a ** 6 * c ** 2 * d - 9 * A ** 2 * a ** 6 * c * d ** 2 + 3 * A ** 2 * a ** 6 * d ** 3 + 3 * A * B ** 2 * a ** 3 * b ** 6 + 21 * A * B * a ** 3 * b ** 3 * c ** 3 - 63 * A * B * a ** 3 * b ** 3 * c ** 2 * d + 63 * A * B * a ** 3 * b ** 3 * c * d ** 2 - 21 * A * B * a ** 3 * b ** 3 * d ** 3 + 3 * A * a ** 3 * c ** 6 - 18 * A * a ** 3 * c ** 5 * d + 45 * A * a ** 3 * c ** 4 * d ** 2 - 60 * A * a ** 3 * c ** 3 * d ** 3 + 45 * A * a ** 3 * c ** 2 * d ** 4 - 18 * A * a ** 3 * c * d ** 5 + 3 * A * a ** 3 * d ** 6 + B ** 3 * b ** 9 + 3 * B ** 2 * b ** 6 * c ** 3 - 9 * B ** 2 * b ** 6 * c ** 2 * d + 9 * B ** 2 * b ** 6 * c * d ** 2 - 3 * B ** 2 * b ** 6 * d ** 3 + 3 * B * b ** 3 * c ** 6 - 18 * B * b ** 3 * c ** 5 * d + 45 * B * b ** 3 * c ** 4 * d ** 2 - 60 * B * b ** 3 * c ** 3 * d ** 3 + 45 * B * b ** 3 * c ** 2 * d ** 4 - 18 * B * b ** 3 * c * d ** 5 + 3 * B * b ** 3 * d ** 6 + c ** 9 - 9 * c ** 8 * d + 36 * c ** 7 * d ** 2 - 84 * c ** 6 * d ** 3 + 126 * c ** 5 * d ** 4 - 126 * c ** 4 * d ** 5 + 84 * c ** 3 * d ** 6 - 36 * c ** 2 * d ** 7 + 9 * c * d ** 8 - d ** 9
     x, y = y, x
     return zz and yy or a and b and c and d and A and B and a + b + c + d + A + B + a * b * c * d * A * B + a ** b ** c ** d ** A ** B
+
+# %% annotations of non-simple targets
+class C:
+    x.y: int = 0
+class D:
+    (z): int
+    a[0]: str
+w.v: print(234) = 5
+def f():
+    x[0]: int
+    (y): int
+    z.w: int
+    return 1
+def g(self):
+    var2: [int, str]
+    my_lst = [42]
+    int.new_attr: int
+    [list][0]: type
+    my_lst[one() - 1]: int = 5
+
+# %% annotations of non-simple targets under future annotations
+from __future__ import annotations
+class C:
+    x.y: int = 0
+class D:
+    (z): int
+def f():
+    x[0]: int
+
+# %% empty star arguments next to double star arguments
+f1(*())
+f1(*(), **{})
+f1(**{})
+f1(*(), **k)
+
+# %% constant tests the compiler does not fold
+if not 1: pass
+if 1 and 1: pass
+if 1 or 1: pass
+if not not not 1: pass
+if not 1 and 1 and 1: pass
+if 1 and 1 or 1 and 1 and 1 or not 1 and 1: pass
+if None or 0: pass
+while 1 and 2:
+    break

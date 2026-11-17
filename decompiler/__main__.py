@@ -16,7 +16,7 @@ import argparse
 import marshal
 import sys
 
-from decompiler import decompile
+from decompiler import Decompiler
 from decompiler.graph.dump import dump_code
 from decompiler.utils.bytecode import compile_source, compile_without_peephole
 
@@ -53,6 +53,8 @@ def main(argv=None) -> int:
     parser.add_argument('-n', '--nopeephole', action='store_true')
     parser.add_argument('-r', '--render', action='store_true')
     parser.add_argument('-v', '--verbose', action='store_true')
+    parser.add_argument('-s', '--strict', action='store_true',
+                        help='stop at the first body that cannot be decompiled instead of marking it')
     args = parser.parse_args(argv)
     if args.verbose:
         from loguru import logger
@@ -76,8 +78,11 @@ def main(argv=None) -> int:
         print(f'# FAILED at stage {result.stage!r}', file=sys.stderr)
         print(result.detail, file=sys.stderr)
         return 1
-    sys.stdout.write(decompile(code))
-    return 0
+    decompiler = Decompiler(code, strict=args.strict, peephole=False if args.nopeephole else None)
+    sys.stdout.write(decompiler.get_source_code())
+    for name, error in decompiler.failures:
+        print(f'# {name or "<module>"}: {error}', file=sys.stderr)
+    return 1 if decompiler.failures else 0
 
 
 if __name__ == '__main__':

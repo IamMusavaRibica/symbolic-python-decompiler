@@ -324,7 +324,13 @@ class ControlMixin:
         if cond.true is cond.false:
             if not statement:
                 raise DecompileError('unsupported conditional', cond.last)
-            st.emit(ast.If(test=cond.test, body=[ast.Pass()], orelse=[]))
+            test = cond.test
+            if isinstance(test, ast.Constant):
+                # 'if 1: pass' is dropped by the compiler and 'if False: pass' by the optimizer; what
+                # produced this test was 'if 1 or 1: pass' (the second operand is what gets dropped)
+                op = ast.Or if test.value else ast.And
+                test = ast.BoolOp(op=op(), values=[test, ast.Constant(value=1)])
+            st.emit(ast.If(test=test, body=[ast.Pass()], orelse=[]))
             return cond.true
         if statement:
             # assert test: the failing side raises AssertionError ('assert not x' fails on the true side)

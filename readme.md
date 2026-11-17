@@ -26,13 +26,15 @@ print(decompile(compile(source, '<source>', 'exec')))
 
 ```
 python -m decompiler file.py            decompile (a .py is compiled first; .pyc works too)
+python -m decompiler file.py --strict   stop at the first body that cannot be decompiled
 python -m decompiler file.py --graph    print the instruction graph as text
 python -m decompiler file.py --check    decompile, recompile, compare the graphs
 python -m decompiler file.py --render   write the graphs to _graphs/*.svg (needs graphviz)
 ```
 
-`Decompiler(code, strict=False)` keeps going when a function or class body cannot be decompiled: the body
-is replaced by a call to `__decompilation_failed__('reason')` and listed in `.failures`.
+`Decompiler(code, strict=False)` (what the command line does unless `--strict`) keeps going when a function or
+class body cannot be decompiled: the body is replaced by a call to `__decompilation_failed__('reason')` and
+listed in `.failures`.
 
 ## How it works
 
@@ -90,7 +92,7 @@ what `compile.c` literally emits. The second one is found through `DECOMPILER_NO
 
 State of things: the standard library of 3.9 round-trips completely (641 files, 19 873 code objects), and so do
 sympy, django, sqlalchemy, twisted, botocore, pygments, astroid and jedi (108 182 code objects). The CPython test
-suite is at 43 178 of 43 183 (the limitations below).
+suite is at 43 182 of 43 183 (the second limitation below).
 
 ## Known limitations
 
@@ -99,8 +101,8 @@ suite is at 43 178 of 43 183 (the limitations below).
   What unreachable code decided about scopes (locals, closures, generators) is restored.
 * A `while True:` loop that every path leaves with `break` has no back edge and is not a loop in the graph.
   It is written without the loop, which is not possible if one of the `break`s crosses a `finally`.
-* Annotations of local variables and of non-simple targets leave no trace in the bytecode.
-* Constant conditions that the compiler does not fold but the optimizer shortens (`if not 1:`).
+* Annotations of local variables leave no trace in the bytecode. Those of non-simple targets (`x.y: int`)
+  are restored, but not always on the statement the author annotated.
 * Where several spellings compile to the same graph, the one that is written is not always the one the
   author chose (`try: return 1` + `finally:` comes back as `try: pass` + `finally:` followed by `return 1`).
 
