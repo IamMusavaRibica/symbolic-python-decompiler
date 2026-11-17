@@ -364,3 +364,64 @@ def f():
     return cache
 global cache
 cache = {}
+
+# %% assert False under a condition
+def f(a, b):
+    if a != b:
+        assert False, 'msg %d' % a
+def g(x):
+    for p in x:
+        if p and x:
+            assert False
+        p.q()
+def h(x):
+    if not x or False:
+        return 1
+    if not x:
+        if False:
+            return 2
+
+# %% chained comparison inside or inside and, as a value
+def h(A, B, x, y):
+    return (A or 1 <= x <= 2) and (B or 1 <= y <= 2)
+def k(A, B, x, y):
+    z = (A and 1 <= x <= 2) or (B and 1 <= y <= 2)
+    w = ((A or x) and B) or y
+    v = (A or B) and (x or y) and not (A and B)
+    return z, w, v
+
+# %% module level if / else whose branch ends the module
+import sys
+if sys.version_info[:2] == (3, 9):
+    names = PY
+else:
+    raise AssertionError('msg')
+
+# %% class body if / else whose branch ends the class
+class C:
+    if flag:
+        a = 1
+    else:
+        raise RuntimeError('no')
+
+# %% nested and / or values whose jumps the optimizer threads through each other
+def f(a, b, c, d, e):
+    x = (a and b or c and d) and e
+    y = (a or b) and (c or d) or e
+    z = ((a and b) or (c and d)) and ((a or b) and (c or d))
+    if x and (a and b or c and d) and e:
+        return (a and b or c and d) or e
+    return x, y, z
+
+# %% assert with a conditional expression whose else is a constant
+def g(a):
+    assert not a.empty if a.c else True
+    assert a.x if a.c else a.y
+    assert (a.x if a.c else a.y is not None), 'm'
+
+# %% a very long arithmetic statement, with and without brackets
+def f(A, B, a, b, c, d):
+    zz = (c - d) * (A ** 3 * a ** 9 + 3 * A ** 2 * B * a ** 6 * b ** 3 - 3 * A ** 2 * a ** 6 * c ** 3 + 9 * A ** 2 * a ** 6 * c ** 2 * d - 9 * A ** 2 * a ** 6 * c * d ** 2 + 3 * A ** 2 * a ** 6 * d ** 3 + 3 * A * B ** 2 * a ** 3 * b ** 6 + 21 * A * B * a ** 3 * b ** 3 * c ** 3 - 63 * A * B * a ** 3 * b ** 3 * c ** 2 * d + 63 * A * B * a ** 3 * b ** 3 * c * d ** 2 - 21 * A * B * a ** 3 * b ** 3 * d ** 3 + 3 * A * a ** 3 * c ** 6 - 18 * A * a ** 3 * c ** 5 * d + 45 * A * a ** 3 * c ** 4 * d ** 2 - 60 * A * a ** 3 * c ** 3 * d ** 3 + 45 * A * a ** 3 * c ** 2 * d ** 4 - 18 * A * a ** 3 * c * d ** 5 + 3 * A * a ** 3 * d ** 6 + B ** 3 * b ** 9 + 3 * B ** 2 * b ** 6 * c ** 3 - 9 * B ** 2 * b ** 6 * c ** 2 * d + 9 * B ** 2 * b ** 6 * c * d ** 2 - 3 * B ** 2 * b ** 6 * d ** 3 + 3 * B * b ** 3 * c ** 6 - 18 * B * b ** 3 * c ** 5 * d + 45 * B * b ** 3 * c ** 4 * d ** 2 - 60 * B * b ** 3 * c ** 3 * d ** 3 + 45 * B * b ** 3 * c ** 2 * d ** 4 - 18 * B * b ** 3 * c * d ** 5 + 3 * B * b ** 3 * d ** 6 + c ** 9 - 9 * c ** 8 * d + 36 * c ** 7 * d ** 2 - 84 * c ** 6 * d ** 3 + 126 * c ** 5 * d ** 4 - 126 * c ** 4 * d ** 5 + 84 * c ** 3 * d ** 6 - 36 * c ** 2 * d ** 7 + 9 * c * d ** 8 - d ** 9)
+    yy = A ** 3 * a ** 9 + 3 * A ** 2 * B * a ** 6 * b ** 3 - 3 * A ** 2 * a ** 6 * c ** 3 + 9 * A ** 2 * a ** 6 * c ** 2 * d - 9 * A ** 2 * a ** 6 * c * d ** 2 + 3 * A ** 2 * a ** 6 * d ** 3 + 3 * A * B ** 2 * a ** 3 * b ** 6 + 21 * A * B * a ** 3 * b ** 3 * c ** 3 - 63 * A * B * a ** 3 * b ** 3 * c ** 2 * d + 63 * A * B * a ** 3 * b ** 3 * c * d ** 2 - 21 * A * B * a ** 3 * b ** 3 * d ** 3 + 3 * A * a ** 3 * c ** 6 - 18 * A * a ** 3 * c ** 5 * d + 45 * A * a ** 3 * c ** 4 * d ** 2 - 60 * A * a ** 3 * c ** 3 * d ** 3 + 45 * A * a ** 3 * c ** 2 * d ** 4 - 18 * A * a ** 3 * c * d ** 5 + 3 * A * a ** 3 * d ** 6 + B ** 3 * b ** 9 + 3 * B ** 2 * b ** 6 * c ** 3 - 9 * B ** 2 * b ** 6 * c ** 2 * d + 9 * B ** 2 * b ** 6 * c * d ** 2 - 3 * B ** 2 * b ** 6 * d ** 3 + 3 * B * b ** 3 * c ** 6 - 18 * B * b ** 3 * c ** 5 * d + 45 * B * b ** 3 * c ** 4 * d ** 2 - 60 * B * b ** 3 * c ** 3 * d ** 3 + 45 * B * b ** 3 * c ** 2 * d ** 4 - 18 * B * b ** 3 * c * d ** 5 + 3 * B * b ** 3 * d ** 6 + c ** 9 - 9 * c ** 8 * d + 36 * c ** 7 * d ** 2 - 84 * c ** 6 * d ** 3 + 126 * c ** 5 * d ** 4 - 126 * c ** 4 * d ** 5 + 84 * c ** 3 * d ** 6 - 36 * c ** 2 * d ** 7 + 9 * c * d ** 8 - d ** 9
+    x, y = y, x
+    return zz and yy or a and b and c and d and A and B and a + b + c + d + A + B + a * b * c * d * A * B + a ** b ** c ** d ** A ** B

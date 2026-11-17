@@ -109,7 +109,7 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             result = self.dispatch(node, st, first)
             first = False
             if result is TERMINATED:
-                return Block(st.stmts, None, st.stack)
+                return Block(st.stmts, None, st.stack, st.implicit_end)
             node = node.next if result is None else result
 
     def parse_branch(self, start: InstructionNode, owners, stack: list, ctx: Ctx) -> Block:

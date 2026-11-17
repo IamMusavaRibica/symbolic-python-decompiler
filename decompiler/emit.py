@@ -7,7 +7,8 @@ for 255 or more bytes of bytecode (``peephole.c``: "Don't optimize if lnotab
 contains instruction pointer delta larger than +255").  A module-level table
 written on one line would therefore recompile to different (unoptimized) code
 than the original, whose author spread it over many lines.  So long lines are
-broken after commas inside brackets, where Python allows a line break anywhere.
+broken after commas and binary operators inside brackets, where Python allows a
+line break anywhere, and with a backslash after a binary operator elsewhere.
 
 The reverse happens too: a code object that *was* compiled from such a long
 line never went through the optimizer, and its statements must stay on one
@@ -20,11 +21,14 @@ import ast
 import io
 import tokenize
 from types import CodeType
-from typing import Dict, Iterable, List, Set
+from typing import Dict, Iterable, List, Set, Tuple
 
 #: lines longer than this are broken at the next opportunity
 WIDTH = 100
 _OPEN, _CLOSE = '([{', ')]}'
+_BREAK_AFTER = {',', '+', '-', '*', '/', '//', '%', '**', '@', '|', '&', '^', '<<', '>>',
+                '==', '!=', '<', '>', '<=', '>='}
+_BREAK_AFTER_WORDS = {'and', 'or'}
 _NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 
 
@@ -78,7 +82,10 @@ def unparse(tree: ast.AST) -> str:
 
 
 def wrap_long_lines(source: str, keep: Iterable[int] = (), width: int = WIDTH) -> str:
-    """Break lines longer than ``width`` after commas inside brackets, except the lines in ``keep``."""
+    """Break lines longer than ``width`` after commas and operators, except the lines in ``keep``.
+
+    Inside brackets a plain line break is used, elsewhere a backslash.
+    """
     keep = set(keep)
     lines = source.split('\n')
     if all(len(line) <= width for line in lines):
@@ -87,35 +94,34 @@ def wrap_long_lines(source: str, keep: Iterable[int] = (), width: int = WIDTH) -
         tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
     except (tokenize.TokenError, SyntaxError, IndentationError):
         return source
-    # row -> columns after which the line is broken
-    breaks: Dict[int, List[int]] = {}
+    # row -> (column after which the line is broken, whether a backslash is needed)
+    breaks: Dict[int, List[Tuple[int, bool]]] = {}
     depth = 0
     for tok in tokens:
-        if tok.type != tokenize.OP:
-            continue
-        if tok.string in _OPEN:
+        if tok.type == tokenize.OP and tok.string in _OPEN:
             depth += 1
-        elif tok.string in _CLOSE:
+        elif tok.type == tokenize.OP and tok.string in _CLOSE:
             depth -= 1
-        elif tok.string == ',' and depth > 0:
+        elif (tok.type == tokenize.OP and tok.string in _BREAK_AFTER and (depth > 0 or tok.string != ',')) \
+                or (tok.type == tokenize.NAME and tok.string in _BREAK_AFTER_WORDS):
             row, col = tok.end
             if row in keep or row != tok.start[0] or len(lines[row - 1]) <= width:
                 continue
             cuts = breaks.setdefault(row, [])
-            if col - (cuts[-1] if cuts else 0) >= width - 20:
-                cuts.append(col)
+            if col - (cuts[-1][0] if cuts else 0) >= width - 20:
+                cuts.append((col, depth == 0))
     for row, cuts in breaks.items():
         line = lines[row - 1]
         indent = ' ' * (len(line) - len(line.lstrip(' ')) + 4)
         pieces = []
         start = 0
-        for cut in cuts:
-            pieces.append(line[start:cut])
-            start = cut
+        for col, backslash in cuts:
+            pieces.append(line[start:col].rstrip(' ') + (' \\' if backslash else ''))
+            start = col
         rest = line[start:]
         if rest.strip():
             pieces.append(rest)
         else:
-            pieces[-1] += rest
-        lines[row - 1] = ('\n' + indent).join(p.strip(' ') if i else p.rstrip(' ') for i, p in enumerate(pieces))
+            pieces[-1] = pieces[-1].rstrip(' \\') + rest
+        lines[row - 1] = ('\n' + indent).join(p.strip(' ') if i else p for i, p in enumerate(pieces))
     return '\n'.join(lines)

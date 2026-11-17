@@ -148,6 +148,46 @@ class CodeGraph:
                     connect(node, target, JUMP, node.offset)
             elif name not in NO_FALLTHROUGH:
                 connect(node, fall, NEXT, node.offset)
+        self._undo_jump_simplification()
+
+    def _remove_edges(self, node: InstructionNode):
+        for label, dst in list(node.out.items()):
+            dst.preds.remove((node, label))
+            self.nx.remove_edge(node, dst, key=label)
+        node.out.clear()
+
+    def _undo_jump_simplification(self):
+        """Put back the conditional jumps the peephole optimizer threaded through each other.
+
+        ``(a or b) and c`` as a value compiles to ``a: JUMP_IF_TRUE_OR_POP y`` with
+        ``y: JUMP_IF_FALSE_OR_POP z``; the optimizer turns the first one into
+        ``POP_JUMP_IF_TRUE y+1`` (and the mirror image for ``(a and b) or c``),
+        which jumps into the middle of a boolean operation.  Both spellings
+        behave the same, and the one that goes through ``y`` is the one the
+        structure of the expression can be read from.
+        """
+        rewrites = {'POP_JUMP_IF_TRUE': (TRUE, FALSE, 'JUMP_IF_FALSE_OR_POP', 'JUMP_IF_TRUE_OR_POP'),
+                    'POP_JUMP_IF_FALSE': (FALSE, TRUE, 'JUMP_IF_TRUE_OR_POP', 'JUMP_IF_FALSE_OR_POP')}
+        changed = True
+        while changed:
+            changed = False
+            for node in list(self._by_offset.values()):
+                spec = rewrites.get(node.opname)
+                if spec is None:
+                    continue
+                taken, other_label, through, new_name = spec
+                target, other = node.out.get(taken), node.out.get(other_label)
+                if target is None or other is None or target.is_pseudo:
+                    continue
+                via = [p for p, label in target.preds if label == NEXT and p.opname == through]
+                if not via:
+                    continue
+                self._remove_edges(node)
+                node.opcode, node.opname = dis.opmap[new_name], new_name
+                node.arg = node.argval = via[0].offset
+                self._add_edge(node, other, NEXT)
+                self._add_edge(node, via[0], JUMP)
+                changed = True
 
     def _number(self) -> List[InstructionNode]:
         order: List[InstructionNode] = []

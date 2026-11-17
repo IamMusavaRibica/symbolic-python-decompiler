@@ -215,6 +215,7 @@ class StatementMixin:
         if not isinstance(value, ast.expr):
             raise DecompileError(f'cannot return {value!r}', node)
         if self.kind in ('module', 'class'):
+            st.implicit_end = True
             return TERMINATED  # the implicit end of the body
         st.emit(self.make_return(value))
         return TERMINATED

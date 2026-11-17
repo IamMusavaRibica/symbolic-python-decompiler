@@ -27,6 +27,8 @@ def negatable(test: ast.expr) -> bool:
     The compiler rewrites ``not (a is b)`` to ``a is not b`` (same for ``in``),
     which changes the instruction; such a test can only be used the way it is.
     """
+    if isinstance(test, ast.Constant):
+        return False  # 'not False' is folded to 'True', which the optimizer then removes as a test
     return not (isinstance(test, ast.Compare) and len(test.ops) == 1
                 and isinstance(test.ops[0], (ast.Is, ast.IsNot, ast.In, ast.NotIn)))
 
@@ -35,11 +37,13 @@ def bool_op(op_type, left: ast.expr, right: ast.expr) -> ast.BoolOp:
     """``left op right``, written as one flat operation when an operand already is one.
 
     ``a and (b and c)`` and ``a and b and c`` compile to the same code, so
-    nothing is lost.
+    nothing is lost.  ``(a and b) and c`` does not (its inner operation has a
+    jump target of its own, which only the peephole optimizer threads away):
+    a left operand that was a complete value on the stack stays as it is.
     """
     values: List[ast.expr] = []
     for operand in (left, right):
-        if type(operand) is ast.BoolOp and isinstance(operand.op, op_type):
+        if type(operand) is ast.BoolOp and isinstance(operand.op, op_type)                 and not (operand is left and getattr(operand, 'complete', False)):
             values.extend(operand.values)
         else:
             values.append(operand)
@@ -129,6 +133,8 @@ class ControlMixin:
                         # 'cond and not sub' or, seen from the other side, 'not cond or sub': take the
                         # one that reads naturally (its true side is where the last jump falls through to)
                         forms = ['and-not', 'not-or'] if sub.last.opname == 'POP_JUMP_IF_TRUE' else ['not-or', 'and-not']
+                        if isinstance(sub.test, ast.Constant) and forms[0] == 'and-not':
+                            forms = []  # 'if cond: assert False': better nested than 'not cond or False'
                         for form in forms:
                             if form == 'and-not' and negatable(sub.test):
                                 cond.test = bool_op(ast.And, cond.test, negate(sub.test))
@@ -181,6 +187,10 @@ class ControlMixin:
                         cond.test = ast.IfExp(test=cond.test, body=yes.test, orelse=no.test)
                     elif yes.true is no.false and yes.false is no.true and negatable(no.test):
                         cond.test = ast.IfExp(test=cond.test, body=yes.test, orelse=negate(no.test))
+                    elif yes.true is no.false and yes.false is no.true and negatable(yes.test):
+                        # the same the other way round ('not a if c else True': True cannot be negated)
+                        cond.test = ast.IfExp(test=cond.test, body=negate(yes.test), orelse=no.test)
+                        yes, no = no, yes
                     else:
                         continue
                     cond.true, cond.false = yes.true, yes.false
@@ -209,6 +219,8 @@ class ControlMixin:
                         # the middle of a chained comparison: its duplicated operand is still below the test
                         len(st.stack) == depth + 1 and isinstance(st.stack[-1], ast.Compare)
                         and st.stack[-2] is st.stack[-1].comparators[-1])):
+                    if not first and node in ctx.stops:
+                        return None  # the jump that ends an enclosing boolean operation is not an operand
                     test = st.pop()
                     if not is_plain(test):
                         return None
@@ -231,6 +243,8 @@ class ControlMixin:
 
     def _conditional(self, node, st):
         test = self.pop_expr(st, node)
+        if isinstance(test, ast.BoolOp):
+            test.complete = True  # computed in full before being tested: see bool_op
         cond = self.make_cond(node, test, st.stack)
         st.stack = self.extend_cond(cond, st.stack, st.ctx)
         if cond.keep_true or cond.keep_false:
@@ -259,6 +273,10 @@ class ControlMixin:
         if not self.owned(start, cond.nodes):
             raise DecompileError('unsupported boolean operation', cond.last)
         rhs = self.parse_block(start, stack, ctx.evolve(start=start, stops=ctx.stops | {join}))
+        if rhs.exit is not None and rhs.exit is not join and rhs.exit.jump is join and rhs.exit.opname == (
+                'JUMP_IF_FALSE_OR_POP' if op is ast.And else 'JUMP_IF_TRUE_OR_POP'):
+            # '(a and b) or ...': the optimizer let a's jump skip b's, which goes to the same place
+            join = rhs.exit
 
         def combine(right):
             if cond.chain is not None:
@@ -321,8 +339,9 @@ class ControlMixin:
         else:
             test, first, second = cond.test, cond.true, cond.false
         body = self.parse_branch(first, cond.nodes, stack, ctx)
-        if statement and body.terminated:
+        if statement and body.terminated and not body.implicit:
             # 'if test: ...; return' followed by the rest: no need to nest the rest in an else
+            # (not when the body ends by reaching the implicit end of a module or class body)
             st.emit(ast.If(test=test, body=body.stmts or [ast.Pass()], orelse=[]))
             return second
         orelse = self.parse_branch(second, cond.nodes, stack, ctx)
@@ -363,7 +382,7 @@ class ControlMixin:
                 orelse.exit = None
 
         after = body.exit if body.exit is not None else orelse.exit
-        if body.terminated and orelse.stmts:
+        if body.terminated and orelse.stmts and not body.implicit:
             st.emit(ast.If(test=test, body=body.stmts, orelse=[]))
             st.stmts.extend(orelse.stmts)
         elif not body.stmts and orelse.stmts:

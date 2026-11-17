@@ -177,12 +177,14 @@ class Ctx:
 
 class State:
     """The symbolic machine state while a block is being parsed."""
-    __slots__ = ('stack', 'stmts', 'ctx', 'pending')
+    __slots__ = ('stack', 'stmts', 'ctx', 'pending', 'implicit_end')
 
     def __init__(self, stack: list, ctx: Ctx):
         self.stack = stack
         self.stmts: List[ast.stmt] = []
         self.ctx = ctx
+        #: the block reached the implicit 'return None' that ends a module or class body
+        self.implicit_end = False
         #: (target, value) pairs of a tuple assignment compiled without building the tuple
         self.pending: List[Tuple[ast.expr, ast.expr]] = []
 
@@ -203,13 +205,15 @@ class State:
 
 class Block:
     """The result of parsing a block."""
-    __slots__ = ('stmts', 'exit', 'stack')
+    __slots__ = ('stmts', 'exit', 'stack', 'implicit')
 
-    def __init__(self, stmts: List[ast.stmt], exit: Optional[InstructionNode], stack: list):
+    def __init__(self, stmts: List[ast.stmt], exit: Optional[InstructionNode], stack: list, implicit: bool = False):
         self.stmts = stmts
         #: the node at which the block stopped; None when control never falls out of it
         self.exit = exit
         self.stack = stack
+        #: terminated by reaching the implicit end of a module or class body, not by a statement
+        self.implicit = implicit
 
     @property
     def terminated(self) -> bool:
