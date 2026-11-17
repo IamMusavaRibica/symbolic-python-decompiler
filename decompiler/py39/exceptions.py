@@ -58,8 +58,18 @@ class ExceptionMixin:
             return self.parse_async_for(node, st)
         if st.depth != 0:
             raise DecompileError('a try statement starts in the middle of an expression', node)
-        if node.jump.opname in ('DUP_TOP', 'POP_TOP'):
+        if node.jump.opname == 'DUP_TOP':
             return self.parse_try_except(node, st)
+        if node.jump.opname == 'POP_TOP':
+            # A bare 'except:' -- unless it is a finally body that begins with break / continue /
+            # return: its exception-path copy (POP_TOP x3, POP_EXCEPT, jump) looks the same.  The
+            # difference shows in the try body (a 'return' there runs an inlined copy of the body).
+            stack, count = list(st.stack), len(st.stmts)
+            try:
+                return self.parse_try_except(node, st)
+            except DecompileError:
+                st.stack[:] = stack
+                del st.stmts[count:]
         return self.parse_try_finally(node, st)
 
     # -- try / finally -----------------------------------------------------------------
