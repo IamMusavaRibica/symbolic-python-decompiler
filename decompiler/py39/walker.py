@@ -38,7 +38,7 @@ import ast
 from types import CodeType
 from typing import List, Optional
 
-from decompiler.errors import DecompileError
+from decompiler.errors import DecompileError, SyntheticLoop
 from decompiler.graph.analysis import GraphAnalysis
 from decompiler.graph.builder import build_graph
 from decompiler.graph.node import InstructionNode, OP_SPIN
@@ -81,7 +81,11 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             first = first.next
         ctx = Ctx(self.graph.entry, frozenset(), len(stack), ())
         try:
-            block = self.parse_block(first, stack, ctx)
+            try:
+                block = self.parse_block(first, stack, ctx)
+            except SyntheticLoop as missing:
+                # not for the walker of an enclosing scope to act on
+                raise DecompileError('a loop without back edge could not be placed', missing.node) from missing
             if not block.terminated:
                 raise DecompileError('statements end without a return', block.exit)
         except DecompileError as e:
@@ -101,12 +105,26 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         st = State(list(stack), ctx)
         node = start
         first = entering
+        statement = (node, list(st.stack), 0)  # where the current statement started
         while True:
             if node is None:
                 raise DecompileError('control flow runs off the end of the code')
             if self.at_boundary(node, st, first):
                 return Block(st.stmts, node, st.stack)
-            result = self.dispatch(node, st, first)
+            if st.depth == 0:
+                statement = (node, list(st.stack), len(st.stmts))
+            try:
+                result = self.dispatch(node, st, first)
+            except SyntheticLoop as missing:
+                if missing.depth != len(ctx.fblocks):
+                    raise
+                head, saved_stack, count = statement
+                st.stack[:] = saved_stack
+                del st.stmts[count:]
+                try:
+                    result = self.parse_synthetic_loop(head, st, missing.exit)
+                except DecompileError:
+                    raise missing  # an enclosing statement may be the one to wrap
             first = False
             if result is TERMINATED:
                 return Block(st.stmts, None, st.stack, st.implicit_end)
@@ -259,9 +277,50 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             return
         jump = self.resolve_jump(block.exit, ctx)
         if jump is None:
+            self.check_missing_loop(block.exit, ctx)
             raise DecompileError('cannot tell where control goes from here', block.exit)
         block.stmts.extend(jump)
         block.exit = None
+
+    def check_missing_loop(self, node: InstructionNode, ctx: Ctx) -> None:
+        """Raise SyntheticLoop when ``node`` runs inlined finally bodies and then jumps somewhere
+        that is neither a return nor explained by a loop of the graph: see SyntheticLoop."""
+        copies = 0
+        index = len(ctx.fblocks) - 1
+        while index >= 0:
+            fb = ctx.fblocks[index]
+            if fb.is_loop:
+                break
+            after = fb.unwind(self, node, False)
+            if after is None or after is TERMINATED:
+                return
+            if isinstance(fb, FinallyTryBlock):
+                copies += 1
+            node = after
+            index -= 1
+        if copies == 0 or node.opname == 'RETURN_VALUE':
+            return  # ('return <constant>' through the copies was ruled out by the caller already)
+        raise SyntheticLoop(node, index + 1)
+
+    def parse_synthetic_loop(self, header: InstructionNode, st: State, exit: InstructionNode):
+        """``while True:`` around the statement at ``header``, which every path leaves with ``break`` to ``exit``."""
+        nodes = {header}
+        work = [header]
+        while work:
+            for _, succ in work.pop().successors():
+                if succ is not exit and succ not in nodes:
+                    nodes.add(succ)
+                    work.append(succ)
+        fb = LoopBlock(header, nodes, False)
+        fb.has_exit = False
+        fb.break_target = exit
+        body_ctx = st.ctx.evolve(start=header, stops=st.ctx.stops | {header, exit}, push=fb)
+        body = self.parse_block(header, st.stack, body_ctx, entering=True)
+        self.close_block(body, body_ctx)
+        if not any(isinstance(s, ast.Break) for s in ast.walk(ast.Module(body=body.stmts, type_ignores=[]))):
+            raise DecompileError('no break in the synthesized loop', header)
+        st.emit(ast.While(test=ast.Constant(value=True), body=body.stmts, orelse=[]))
+        return exit
 
     def try_return(self, node: InstructionNode, st: State) -> bool:
         """``return <value>``: the value is on the stack and the clean-up code of every frame block follows."""

@@ -24,5 +24,20 @@ class DecompileError(Exception):
         return self.message + where
 
 
+class SyntheticLoop(DecompileError):
+    """Control leaves through inlined finally bodies to ``exit`` without a loop in the graph.
+
+    Only ``break`` and ``continue`` are compiled that way (``return`` ends in RETURN_VALUE),
+    so the code is inside a ``while True:`` loop that no path goes around; the graph has no
+    cycle for it.  The loop is synthesized around the statement at frame block depth
+    ``depth`` by the block that parses it.
+    """
+
+    def __init__(self, exit, depth: int):
+        super().__init__('a loop without back edge is left here', exit)
+        self.exit = exit
+        self.depth = depth
+
+
 class StackError(DecompileError):
     """The symbolic stack does not hold what an instruction needs."""

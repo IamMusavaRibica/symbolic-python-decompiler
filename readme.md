@@ -83,6 +83,7 @@ python -m tests                      run the cases in tests/cases (-k TEXT, -v, 
 python -m unittest tests.test_roundtrip
 python tools/corpus_check.py [PATH]  round-trip every code object of a source tree (default: the stdlib)
 python tools/corpus_check.py --explain FILE [-k NAME]    show how the graphs of the bad ones differ
+python tools/build_graph.py FILE [-k NAME]               render the instruction graphs as .svg and open them
 ```
 
 Test cases are plain Python snippets separated by `# %% name` lines. Every case runs with two compilers: the
@@ -92,15 +93,13 @@ what `compile.c` literally emits. The second one is found through `DECOMPILER_NO
 
 State of things: the standard library of 3.9 round-trips completely (641 files, 19 873 code objects), and so do
 sympy, django, sqlalchemy, twisted, botocore, pygments, astroid and jedi (108 182 code objects). The CPython test
-suite is at 43 182 of 43 183 (the second limitation below).
+suite round-trips completely as well (43 183 code objects).
 
 ## Known limitations
 
 * Unreachable code is not decompiled: the graph only contains reachable instructions, so statements after an
   unconditional `raise` or `return` are lost (a module-level bare `raise` makes the rest of the module disappear).
   What unreachable code decided about scopes (locals, closures, generators) is restored.
-* A `while True:` loop that every path leaves with `break` has no back edge and is not a loop in the graph.
-  It is written without the loop, which is not possible if one of the `break`s crosses a `finally`.
 * Annotations of local variables leave no trace in the bytecode. Those of non-simple targets (`x.y: int`)
   are restored, but not always on the statement the author annotated.
 * Where several spellings compile to the same graph, the one that is written is not always the one the

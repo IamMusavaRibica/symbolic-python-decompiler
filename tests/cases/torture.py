@@ -423,3 +423,53 @@ def f(xs):
                 pass
             else:
                 break
+
+# %% while true without back edge: every path breaks through a finally
+def f(x):
+    while True:
+        try:
+            if x:
+                if y:
+                    if z:
+                        break
+                    break
+                break
+        finally:
+            g()
+        break
+def h(r, x):
+    for i in r:
+        while True:
+            try:
+                if x:
+                    break
+            finally:
+                g()
+            break
+        h(i)
+def k(x):
+    a()
+    while True:
+        try:
+            with m():
+                if x:
+                    break
+        finally:
+            g()
+        b()
+        break
+    c()
+def test_jump_over_break_in_try_finally_block(output):
+    output.append(1)
+    while True:
+        output.append(3)
+        try:
+            output.append(5)
+            if not output:
+                break
+            output.append(8)
+        finally:
+            output.append(10)
+        output.append(11)
+        break
+    output.append(13)

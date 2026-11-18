@@ -372,6 +372,8 @@ class ControlMixin:
             body_jump = self.resolve_jump(body.exit, ctx, ours(body.exit))
             orelse_jump = self.resolve_jump(orelse.exit, ctx, ours(orelse.exit))
             if body_jump is None and orelse_jump is None:
+                self.check_missing_loop(body.exit, ctx)
+                self.check_missing_loop(orelse.exit, ctx)
                 raise DecompileError('the branches of an if never meet', cond.last)
             if body_jump is not None and orelse_jump is not None:
                 # Both could be jumps.  The one placed last in the bytecode may just as well be the
