@@ -152,7 +152,8 @@ class ExceptionMixin:
                 jump = self.resolve_jump(handler.after, ctx, len(handler.after.preds) == 1)
                 if jump is None:
                     raise DecompileError('cannot tell where an except clause goes', handler.after)
-                handler.block.stmts.extend(jump)
+                handler.block.exit = handler.after
+                self.append_jump(handler.block, jump, ctx)
 
         st.emit(ast.Try(
             body=body.stmts or [ast.Pass()],

@@ -66,7 +66,9 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         self.kind = kind
         self.graph = build_graph(code, decompiler.dead_code)
         self.analysis = GraphAnalysis(self.graph)
-        self._dead_claimed = set()  # [dead-code] dead regions already attached to a block
+        # [dead-code] dead regions already attached to a block; the RERAISE that ends a chain of
+        # handlers is never a statement (dead when a bare 'except:' precedes it)
+        self._dead_claimed = {entry for _, entry in self.graph.dead_entries if entry.opname == 'RERAISE'}
         self._dead_no_claim = False  # [dead-code] the block ended at the loop's own back jump
         # [dead-code] the function's implicit 'return None' when it is unreachable: it belongs to the
         # function body, not to whatever nested block ends just before it
@@ -125,8 +127,8 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
                 raise DecompileError('control flow runs off the end of the code')
             # [dead-code] a POP_BLOCK followed (after the clean-up code) by unreachable code is not the
             # normal end of a try body but a jump statement: the normal end is never followed by one
-            jump_copy = self.graph.dead_code and not first and st.depth == 0 and node.opname == 'POP_BLOCK' \
-                and self.copy_has_dead_continuation(node, ctx)
+            jump_copy = self.graph.dead_code and not first and st.depth == 0 \
+                and node.opname in ('POP_BLOCK', 'POP_EXCEPT') and self.copy_has_dead_continuation(node, ctx)
             if not jump_copy and self.at_boundary(node, st, first):
                 return Block(st.stmts, node, st.stack)
             if st.depth == 0:
@@ -167,7 +169,7 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
 
     def copy_has_dead_continuation(self, node: InstructionNode, ctx: Ctx) -> bool:
         """[dead-code] The clean-up code starting at ``node`` is followed by unreachable code."""
-        anchors = {anchor for anchor, _ in self.graph.dead_entries}
+        anchors = {anchor for anchor, entry in self.graph.dead_entries if entry.opname != 'RERAISE'}
         for fb in reversed(ctx.fblocks):
             if fb.is_loop:
                 return False
@@ -181,10 +183,14 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
                     break
                 consumed.add(current)
                 current = current.next
-            # the dead code follows the jump at the end of the clean-up code: the anchor is the
-            # node whose fall-through was threaded through that jump
+            # The dead code follows the jump at the end of the clean-up code: the anchor is the
+            # node whose fall-through was threaded through that jump.  Clean-up code contains no
+            # other jump: one before the end means this is the normal end of a construct (a with
+            # statement's exit call jumping over its handler) and not part of a jump statement.
             if any(n.next is after for n in consumed & anchors):
                 return True
+            if any(n.threaded for n in consumed):
+                return False
             node = after
         return False
 
@@ -277,6 +283,8 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         ctx = st.ctx
         if not entering and node in ctx.stops:
             return True
+        if node is self.implicit_end and ctx.start is not self.graph.entry:
+            return True  # [dead-code] the function's own end: not part of a nested block
         if not self.analysis.dominates(ctx.start, node):
             return True
         if len(st.stack) == ctx.base:
@@ -416,8 +424,23 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         if jump is None:
             self.check_missing_loop(block.exit, ctx)
             raise DecompileError('cannot tell where control goes from here', block.exit)
+        self.append_jump(block, jump, ctx)
+
+    def append_jump(self, block: Block, jump: List[ast.stmt], ctx: Ctx) -> None:
+        """End ``block`` with the jump statement found at its exit."""
+        exit = block.exit
         block.stmts.extend(jump)
         block.exit = None
+        if self.graph.dead_code:
+            # [dead-code] the unreachable statements written after the jump statement
+            continuation = self.dead_continuation(exit, ctx)
+            if continuation is not None and continuation.opname not in BLOCK_END_OPS:
+                # (a region that starts with clean-up code is the epilogue of the construct the
+                # jump left, not statements)
+                tail = self.parse_block(continuation, block.stack, ctx.evolve(start=continuation))
+                block.stmts.extend(tail.stmts)
+                block.exit = tail.exit
+                block.implicit = tail.implicit
 
     def check_missing_loop(self, node: InstructionNode, ctx: Ctx) -> None:
         """Raise SyntheticLoop when ``node`` runs inlined finally bodies and then jumps somewhere

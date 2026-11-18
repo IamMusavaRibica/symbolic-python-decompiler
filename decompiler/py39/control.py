@@ -340,7 +340,8 @@ class ControlMixin:
                 return self.parse_assert(negate(cond.test), cond.true, cond.false, st)
 
         # the side reached by falling through the last jump is what the source calls the body
-        if cond.last.opname == 'POP_JUMP_IF_TRUE' and negatable(cond.test):
+        fall = cond.last.false if cond.last.opname == 'POP_JUMP_IF_TRUE' else cond.last.true
+        if fall is cond.false and fall is not cond.true and negatable(cond.test):
             test, first, second = negate(cond.test), cond.false, cond.true
         else:
             test, first, second = cond.test, cond.true, cond.false
@@ -388,11 +389,9 @@ class ControlMixin:
                 else:
                     orelse_jump = None
             if body_jump is not None:
-                body.stmts.extend(body_jump)
-                body.exit = None
+                self.append_jump(body, body_jump, ctx)
             if orelse_jump is not None:
-                orelse.stmts.extend(orelse_jump)
-                orelse.exit = None
+                self.append_jump(orelse, orelse_jump, ctx)
 
         after = body.exit if body.exit is not None else orelse.exit
         # [dead-code] (an else branch that ran into the dead epilogue of the enclosing try has ended too)
@@ -499,6 +498,12 @@ class ControlMixin:
                   and e.opname != 'LOAD_ASSERTION_ERROR']
         if behind:
             fb.layout_exit = max(behind, key=lambda e: e.offset)
+        if self.graph.dead_code and normal_exit is not None and normal_exit is self.function_end:
+            # [dead-code] the loop is the last statement: nothing follows it that 'break' could go to.
+            # (Reading a terminating branch of the body as the code after the loop gives the same
+            # graph, but with an explicit 'return' and a dead implicit one that were not there.)
+            fb.break_target = normal_exit
+            return
         if normal_exit is not None and any(p in fb.nodes and p not in cond_nodes for p, _ in normal_exit.preds):
             # the loop is left to where it ends anyway from somewhere else than its test:
             # 'break' in a loop without else clause

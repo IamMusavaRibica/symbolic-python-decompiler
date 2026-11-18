@@ -141,6 +141,7 @@ class CodeGraph:
             target, jumps = resolve(raw_offset, not self._dead_phase)
             if jumps and origin >= 0 and raw_offset == following.get(origin):
                 threaded[origin] = jumps[0]  # [dead-code]
+                src.threaded = True
             if not self._dead_phase:
                 live_jumps.update(jumps)  # [dead-code]
             dst = node_for(target)
