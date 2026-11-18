@@ -78,6 +78,9 @@ class FinallyTryBlock(FBlock):
         self.entry = entry  # first instruction of the exception-path copy
         self.terminal = terminal  # the RERAISE that ends that copy (None: the body never completes)
         self.copy_nodes = set()  # the nodes of the inlined copy that was skipped last
+        #: [dead-code] the body's normal exit is unreachable (its epilogue exists as dead code): every
+        #: live way out of the body is a jump statement
+        self.dead_normal_exit = None  # the dead epilogue's first node when so
 
     def unwind(self, walker, node, preserve_tos):
         node = follow(node, 'POP_BLOCK')

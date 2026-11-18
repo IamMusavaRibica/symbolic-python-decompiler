@@ -171,9 +171,7 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         """[dead-code] The clean-up code starting at ``node`` is followed by unreachable code."""
         anchors = {anchor for anchor, entry in self.graph.dead_entries if entry.opname != 'RERAISE'}
         for fb in reversed(ctx.fblocks):
-            if fb.is_loop:
-                return False
-            after = fb.unwind(self, node, False)
+            after = fb.unwind(self, node, False)  # (a loop's: the POP_TOP of a 'break' out of a for loop)
             if after is None or after is TERMINATED:
                 return False
             consumed = set(fb.copy_nodes) if isinstance(fb, FinallyTryBlock) else set()
@@ -189,10 +187,35 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             # statement's exit call jumping over its handler) and not part of a jump statement.
             if any(n.next is after for n in consumed & anchors):
                 return True
-            if any(n.threaded for n in consumed):
+            # (a jump inside a finally body's copy, a break in a loop of its own, is not that)
+            if any(n.threaded and n.next is after for n in consumed) or fb.is_loop:
                 return False
             node = after
         return False
+
+    def leaves_by_return(self, node: InstructionNode, ctx: Ctx) -> bool:
+        """[dead-code] The clean-up code at ``node`` is that of a jump statement: some enclosing try
+        statement's normal exit is dead, and the chain runs through the frame blocks without a jump
+        in between (a body that falls through jumps over its exception handler)."""
+        if not any(isinstance(fb, FinallyTryBlock) and fb.dead_normal_exit is not None for fb in ctx.fblocks):
+            return False
+        for fb in reversed(ctx.fblocks):
+            if fb.is_loop:
+                break
+            after = fb.unwind(self, node, False)
+            if after is None or after is TERMINATED:
+                return False
+            consumed = set(fb.copy_nodes) if isinstance(fb, FinallyTryBlock) else set()
+            current = node
+            for _ in range(200):
+                if current is None or current is after:
+                    break
+                consumed.add(current)
+                current = current.next
+            if any(n.threaded and n.next is after for n in consumed):
+                return False
+            node = after
+        return True
 
     @staticmethod
     def follow_dead_jumps(node):
@@ -243,6 +266,8 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         if not live:
             return None
         last = max(live, key=lambda n: n.offset)
+        if last.threaded:
+            return None  # the code after it is where its jump went, not what follows it in layout
         for anchor, entry in self.graph.dead_entries:
             if anchor is last:
                 return entry
@@ -531,6 +556,12 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
                 other = copy.out.get(label)
                 if other is not None:
                     work.append((succ, other))
+        if self.graph.dead_code:
+            # [dead-code] unreachable code inside the copy (the epilogue of a try statement left with
+            # 'break') belongs to the copy, which is never read as statements
+            # (not the one hanging off the copy's last node: that follows the jump statement itself)
+            self._dead_claimed.update(entry for anchor, entry in self.graph.dead_entries
+                                      if anchor in fb.copy_nodes and anchor.next is not found)
         return found if found is not None else TERMINATED
 
     @staticmethod

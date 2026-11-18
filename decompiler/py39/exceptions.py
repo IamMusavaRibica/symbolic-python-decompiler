@@ -85,6 +85,13 @@ class ExceptionMixin:
         if final.exit is not None and final.exit.opname != 'RERAISE':
             self.close_block(final, end_ctx)
         fb = FinallyTryBlock(entry, final.exit)
+        if self.graph.dead_code:
+            # [dead-code] 'return <constant>' inside the body is the clean-up code followed by the
+            # constant, which looks like the body falling through.  When the body's own normal
+            # exit exists as dead code, it did not fall through: the live way out is a return.
+            region = self.closes_with_dead(node.next)
+            if region is not None and region.opname == 'POP_BLOCK' and region not in self._dead_claimed:
+                fb.dead_normal_exit = region
 
         body_ctx = ctx.evolve(start=node.next, push=fb)
         body = self.parse_block(node.next, stack, body_ctx)
@@ -92,9 +99,20 @@ class ExceptionMixin:
         if body.exit is not None:
             if body.exit.opname != 'POP_BLOCK':
                 raise DecompileError('unsupported end of a try body', body.exit)
+            if self.graph.dead_code and not body.exit.dead and self.leaves_by_return(body.exit, body_ctx):
+                jump = self.resolve_jump(body.exit, body_ctx)  # [dead-code]
+                if jump is not None and isinstance(jump[-1], ast.Return):
+                    self.append_jump(body, jump, body_ctx)
+        if body.exit is not None:
             after = self.skip_finally_copy(fb, body.exit.next)
             if body.exit.dead and after is not TERMINATED and not self.follow_dead_jumps(after).dead:
                 after = TERMINATED  # [dead-code] a dead epilogue that leads to live code: see parse_handlers
+        elif fb.dead_normal_exit is not None and fb.dead_normal_exit not in self._dead_claimed:
+            # [dead-code] the statement continues (dead) where its unreachable normal exit leads
+            self._dead_claimed.add(fb.dead_normal_exit)
+            after = self.skip_finally_copy(fb, fb.dead_normal_exit.next)
+            if after is not TERMINATED and not self.follow_dead_jumps(after).dead:
+                after = TERMINATED
         st.emit(ast.Try(body=body.stmts or [ast.Pass()], handlers=[], orelse=[],
                         finalbody=final.stmts or [ast.Pass()]))
         return after
@@ -123,7 +141,17 @@ class ExceptionMixin:
                 continuations.append(handler.after)
 
         orelse: List[ast.stmt] = []
-        if after_body is not None and after_body in continuations:
+        fell_through = None
+        if self.graph.dead_code and after_body is None and len(continuations) == 1:
+            # [dead-code] the body ended in a jump statement and the handlers meet somewhere: that is
+            # where the statement ends.  A handler that itself jumped has no continuation here (its
+            # dead epilogue told), except for 'return <constant>', which leaves none behind.
+            jump = self.resolve_jump(continuations[0], ctx, len(continuations[0].preds) == 1)
+            if jump is None or not isinstance(jump[0], ast.Return):
+                fell_through = continuations[0]
+        if fell_through is not None:
+            join = fell_through
+        elif after_body is not None and after_body in continuations:
             join = after_body
         else:
             # Handlers that go somewhere else than the others jump (continue/break/return);
