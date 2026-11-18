@@ -29,6 +29,9 @@ NEXT = 'next'
 TRUE = 'true'
 FALSE = 'false'
 JUMP = 'jump'
+#: [dead-code] from a terminator (or the instruction before a threaded jump) to the unreachable
+#: instruction that physically follows; not in EDGE_ORDER, so successors() never yields it
+DEAD = 'dead'
 EDGE_ORDER = (NEXT, TRUE, FALSE, JUMP)
 
 # Pseudo instructions (negative opcodes never collide with real ones)
@@ -52,7 +55,7 @@ class InstructionNode:
     """
 
     __slots__ = ('opcode', 'opname', 'arg', 'argval', 'offset', 'lineno',
-                 'out', 'preds', 'back_jumps', 'index', '__weakref__')
+                 'out', 'preds', 'back_jumps', 'index', 'dead', 'dead_next', '__weakref__')
 
     def __init__(self, opcode: int, arg, argval, offset: int, lineno: Optional[int] = None):
         self.opcode: int = opcode
@@ -69,6 +72,11 @@ class InstructionNode:
         self.back_jumps: List[int] = []
         #: position in the canonical (DFS pre-order) numbering, filled in by CodeGraph
         self.index: int = -1
+        #: [dead-code] not reachable from the entry
+        self.dead: bool = False
+        #: [dead-code] the unreachable instruction that physically follows a terminator (kept out of
+        #: ``out`` so that nothing that looks at successors sees it)
+        self.dead_next: Optional['InstructionNode'] = None
 
     @classmethod
     def from_instruction(cls, instr: dis.Instruction, lineno: Optional[int] = None) -> 'InstructionNode':

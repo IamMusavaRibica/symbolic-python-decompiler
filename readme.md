@@ -95,11 +95,32 @@ State of things: the standard library of 3.9 round-trips completely (641 files, 
 sympy, django, sqlalchemy, twisted, botocore, pygments, astroid and jedi (108 182 code objects). The CPython test
 suite round-trips completely as well (43 183 code objects).
 
+## Unreachable code (experimental, off by default)
+
+The graph only holds reachable instructions, so statements after an unconditional `raise`, `return`, `break`
+or `continue` are normally lost, although the compiler emitted them. `--dead-code` (`python -m decompiler`,
+`python -m tests -d`, `tools/corpus_check.py --dead-code`, `tools/build_graph.py --dead-code`; in code
+`decompiler.options.dead_code = True` or the environment variable `DECOMPILER_DEAD_CODE=1`) follows the
+instruction after every terminator as well (an edge labelled `dead`, `D->n` in the text dump, dotted in
+the drawings). Unreachable code is then part of the graph and of the comparison, and a block that ended in a
+jump statement continues with the dead statements that follow it. Unconditional jumps inside dead code stay
+nodes (a dead `break` is nothing else), regions made of nothing but jumps are dropped (they depend on which
+of two equivalent spellings was written), and spellings that only differ in unreachable code are told apart
+by it (`if a: return 1 else: return 2` leaves the function's implicit `return None` behind,
+`if a: return 1` + `return 2` does not).
+
+State of things: the test cases pass 360 of 400 runs in this mode, the standard library 19 599 of 19 873
+code objects. What fails are mostly try statements whose body or handlers end in a jump statement: their
+dead epilogues (`POP_BLOCK`, `POP_EXCEPT`, the jump over the handlers) sometimes end up read as statements.
+Everything that exists only for this mode is marked `[dead-code]` in the source, so it can be found, fixed
+or removed as one piece; with the option off the decompiler behaves exactly as before.
+
 ## Known limitations
 
-* Unreachable code is not decompiled: the graph only contains reachable instructions, so statements after an
-  unconditional `raise` or `return` are lost (a module-level bare `raise` makes the rest of the module disappear).
-  What unreachable code decided about scopes (locals, closures, generators) is restored.
+* Unreachable code is not decompiled unless `--dead-code` is given (see above): the graph only contains
+  reachable instructions, so statements after an unconditional `raise` or `return` are lost (a module-level
+  bare `raise` makes the rest of the module disappear). What unreachable code decided about scopes (locals,
+  closures, generators) is restored either way.
 * Annotations of local variables leave no trace in the bytecode. Those of non-simple targets (`x.y: int`)
   are restored, but not always on the statement the author annotated.
 * Where several spellings compile to the same graph, the one that is written is not always the one the

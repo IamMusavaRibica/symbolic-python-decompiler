@@ -30,7 +30,7 @@ from types import CodeType
 from typing import Dict, List, Optional
 
 from decompiler.graph.builder import CodeGraph, build_graph
-from decompiler.graph.node import InstructionNode, NEXT, TRUE, FALSE, JUMP
+from decompiler.graph.node import InstructionNode, NEXT, TRUE, FALSE, JUMP, DEAD
 
 _HASCONST = frozenset(dis.hasconst)
 _BY_NAME = frozenset(dis.hasname) | frozenset(dis.haslocal) | frozenset(dis.hasfree)
@@ -121,6 +121,8 @@ def _arg_text(node: InstructionNode, children: Dict[InstructionNode, str]) -> st
 
 
 def _opname(node: InstructionNode) -> str:
+    if node.opname in ('JUMP_FORWARD', 'JUMP_ABSOLUTE'):
+        return 'JUMP'  # [dead-code] (only dead ones are nodes; which of the two is layout)
     return 'POP_JUMP_IF' if node.is_branch else node.opname
 
 
@@ -146,6 +148,8 @@ def dump_graph(graph: CodeGraph, path: str = '', offsets: bool = False,
             edges.append(f'F->{out[FALSE].index}')
         if JUMP in out:
             edges.append(f'J->{out[JUMP].index}')
+        if node.dead_next is not None:  # [dead-code]
+            edges.append(f'D->{node.dead_next.index}')
         if edges:
             text = f'{text:<34} ' + ' '.join(edges)
         if offsets and not node.is_pseudo:

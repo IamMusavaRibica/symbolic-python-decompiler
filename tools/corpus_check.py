@@ -181,10 +181,15 @@ def main(argv=None) -> int:
     parser.add_argument('--timeout', type=int, default=120)
     parser.add_argument('--show', default=None)
     parser.add_argument('-o', default=None)
+    parser.add_argument('--dead-code', action='store_true', help='also decompile and compare unreachable code')
     parser.add_argument('--explain', action='store_true',
                         help='single file: print the graph differences of every bad code object')
     parser.add_argument('-k', default='', help='with --explain: only code objects whose name contains this')
     args = parser.parse_args(argv)
+    if args.dead_code:
+        os.environ['DECOMPILER_DEAD_CODE'] = '1'  # the worker processes read it
+        from decompiler import options
+        options.dead_code = True
     if args.explain:
         for path in args.paths:
             explain(path, args.n, args.k)

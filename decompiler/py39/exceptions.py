@@ -38,13 +38,15 @@ def exception_entry(stack: list) -> list:
 
 
 class Handler:
-    __slots__ = ('type', 'name', 'block', 'after')
+    __slots__ = ('type', 'name', 'block', 'after', 'dead_after')
 
-    def __init__(self, type_, name, block: Block, after):
+    def __init__(self, type_, name, block: Block, after, dead_after=None):
         self.type = type_
         self.name = name
         self.block = block
         self.after = after  # where control continues after the handler, None if it never does
+        #: [dead-code] where the dead epilogue of a handler that never completes would have gone
+        self.dead_after = dead_after
 
 
 class ExceptionMixin:
@@ -91,6 +93,8 @@ class ExceptionMixin:
             if body.exit.opname != 'POP_BLOCK':
                 raise DecompileError('unsupported end of a try body', body.exit)
             after = self.skip_finally_copy(fb, body.exit.next)
+            if body.exit.dead and after is not TERMINATED and not self.follow_dead_jumps(after).dead:
+                after = TERMINATED  # [dead-code] a dead epilogue that leads to live code: see parse_handlers
         st.emit(ast.Try(body=body.stmts or [ast.Pass()], handlers=[], orelse=[],
                         finalbody=final.stmts or [ast.Pass()]))
         return after
@@ -105,6 +109,12 @@ class ExceptionMixin:
             if body.exit.opname != 'POP_BLOCK':
                 raise DecompileError('unsupported end of a try body', body.exit)
             after_body = body.exit.next
+            if body.exit.dead:
+                # [dead-code] the body ended in a jump statement; its epilogue leads to the code after
+                # the statement, which is dead too (then it is what follows) or live (then nothing does)
+                after_body = self.follow_dead_jumps(after_body)
+                if after_body is not TERMINATED and not after_body.dead:
+                    after_body = None
 
         handlers = self.parse_handlers(node.jump, st)
         continuations: List = []
@@ -130,6 +140,13 @@ class ExceptionMixin:
                     orelse = block.stmts
             else:
                 join = after_body
+                dead_join = self.dead_try_join(node, handlers, after_body)
+                if dead_join is not None and dead_join is not after_body:
+                    join = dead_join
+                    orelse_ctx = ctx.evolve(stops=ctx.stops | {join})
+                    block = self.parse_branch(after_body, {body.exit}, stack, orelse_ctx)
+                    self.close_block(block, orelse_ctx, accept=(join,))
+                    orelse = block.stmts
         for handler in handlers:
             if handler.after is not None and handler.after is not join:
                 jump = self.resolve_jump(handler.after, ctx, len(handler.after.preds) == 1)
@@ -143,6 +160,21 @@ class ExceptionMixin:
                       for h in handlers],
             orelse=orelse, finalbody=[]))
         return join if join is not None else TERMINATED
+
+    def dead_try_join(self, node, handlers, after_body):
+        """[dead-code] Where a try statement whose handlers all jump ends, when the code after the
+        body is an else clause: told by where the handlers' dead epilogues go (past the else clause),
+        or by the function's implicit return being left behind the statement."""
+        if not self.graph.dead_code or after_body is None:
+            return None
+        if any(h.dead_after is after_body for h in handlers):
+            return None
+        targets = {h.dead_after for h in handlers if h.dead_after is not None}
+        if len(targets) == 1:
+            return targets.pop()
+        if not targets and self.ends_function(node):
+            return self.implicit_end
+        return None
 
     def parse_handlers(self, entry, st: State) -> List[Handler]:
         ctx, stack = st.ctx, st.stack
@@ -189,11 +221,16 @@ class ExceptionMixin:
             handler_ctx = ctx.evolve(start=node, base=len(saved), push=cleanup)
             block = self.parse_block(node, saved, handler_ctx)
             after = None
+            dead_after = None
             if block.exit is not None:
                 after = cleanup.unwind(self, block.exit, False)
                 if after is None:
                     raise DecompileError('unsupported end of an except clause', block.exit)
-            handlers.append(Handler(exc_type, name, block, after))
+                if block.exit.dead and not self.follow_dead_jumps(after).dead:
+                    # [dead-code] the handler ended in a jump statement; what follows is only the
+                    # epilogue the compiler emits anyway, which leads to live code
+                    dead_after, after = self.follow_dead_jumps(after), None
+            handlers.append(Handler(exc_type, name, block, after, dead_after))
             if following is None:
                 break  # a bare 'except:' is always the last one
             current = following

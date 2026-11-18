@@ -473,3 +473,29 @@ def test_jump_over_break_in_try_finally_block(output):
         output.append(11)
         break
     output.append(13)
+
+# %% unreachable code after continue, raise and return (decompiled only with --dead-code)
+object = 5
+def f(x):
+    while True:
+        try:
+            continue
+            def lmao(r):
+                nonlocal x
+                y = 1
+            raise
+        finally:
+            g()
+        break
+def g(a):
+    if a:
+        return 1
+    else:
+        return 2
+def h(self, key):
+    try:
+        self[key]
+    except KeyError:
+        return False
+    else:
+        return True

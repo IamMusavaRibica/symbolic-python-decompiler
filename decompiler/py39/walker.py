@@ -64,8 +64,22 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         self.code = code
         #: 'module', 'function', 'lambda', 'class' or 'comprehension'
         self.kind = kind
-        self.graph = build_graph(code)
+        self.graph = build_graph(code, decompiler.dead_code)
         self.analysis = GraphAnalysis(self.graph)
+        self._dead_claimed = set()  # [dead-code] dead regions already attached to a block
+        self._dead_no_claim = False  # [dead-code] the block ended at the loop's own back jump
+        # [dead-code] the function's implicit 'return None' when it is unreachable: it belongs to the
+        # function body, not to whatever nested block ends just before it
+        self.implicit_end = None
+        #: [dead-code] the final 'LOAD_CONST None' of the code object (the implicit return), live or not
+        self.function_end = None
+        size = len(code.co_code)
+        last, before = self.graph.node_at(size - 2), self.graph.node_at(size - 4)
+        if last is not None and before is not None and last.opname == 'RETURN_VALUE' \
+                and before.opname == 'LOAD_CONST' and before.argval is None and before.next is last:
+            self.function_end = before
+            if before.dead:
+                self.implicit_end = before
         #: the code has variable annotations ('x: int' at module or class level)
         self.has_annotations = any(n.opname == 'SETUP_ANNOTATIONS' for n in self.graph.nodes)
 
@@ -109,12 +123,25 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         while True:
             if node is None:
                 raise DecompileError('control flow runs off the end of the code')
-            if self.at_boundary(node, st, first):
+            # [dead-code] a POP_BLOCK followed (after the clean-up code) by unreachable code is not the
+            # normal end of a try body but a jump statement: the normal end is never followed by one
+            jump_copy = self.graph.dead_code and not first and st.depth == 0 and node.opname == 'POP_BLOCK' \
+                and self.copy_has_dead_continuation(node, ctx)
+            if not jump_copy and self.at_boundary(node, st, first):
                 return Block(st.stmts, node, st.stack)
             if st.depth == 0:
                 statement = (node, list(st.stack), len(st.stmts))
+            if node.dead:
+                self._dead_claimed.add(node)  # [dead-code] reached by flow: not a continuation any more
             try:
-                result = self.dispatch(node, st, first)
+                if jump_copy:
+                    jump = self.resolve_jump(node, ctx)
+                    if jump is None:
+                        raise DecompileError('cannot tell where control goes from here', node)
+                    st.stmts.extend(jump)
+                    result = TERMINATED
+                else:
+                    result = self.dispatch(node, st, first)
             except SyntheticLoop as missing:
                 if missing.depth != len(ctx.fblocks):
                     raise
@@ -127,8 +154,96 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
                     raise missing  # an enclosing statement may be the one to wrap
             first = False
             if result is TERMINATED:
+                if self.graph.dead_code and not self._dead_no_claim:  # [dead-code]
+                    continuation = self.dead_continuation(statement[0], ctx)
+                    if continuation is not None:
+                        st.stack[:] = statement[1]
+                        st.implicit_end = False
+                        node = continuation
+                        continue
+                self._dead_no_claim = False
                 return Block(st.stmts, None, st.stack, st.implicit_end)
             node = node.next if result is None else result
+
+    def copy_has_dead_continuation(self, node: InstructionNode, ctx: Ctx) -> bool:
+        """[dead-code] The clean-up code starting at ``node`` is followed by unreachable code."""
+        anchors = {anchor for anchor, _ in self.graph.dead_entries}
+        for fb in reversed(ctx.fblocks):
+            if fb.is_loop:
+                return False
+            after = fb.unwind(self, node, False)
+            if after is None or after is TERMINATED:
+                return False
+            consumed = set(fb.copy_nodes) if isinstance(fb, FinallyTryBlock) else set()
+            current = node
+            for _ in range(200):
+                if current is None or current is after:
+                    break
+                consumed.add(current)
+                current = current.next
+            # the dead code follows the jump at the end of the clean-up code: the anchor is the
+            # node whose fall-through was threaded through that jump
+            if any(n.next is after for n in consumed & anchors):
+                return True
+            node = after
+        return False
+
+    @staticmethod
+    def follow_dead_jumps(node):
+        """[dead-code] A dead unconditional jump stands for where it goes."""
+        while node is not None and node is not TERMINATED and node.dead and node.opname in ('JUMP_ABSOLUTE', 'JUMP_FORWARD'):
+            node = node.jump
+        return node
+
+    def _dead_jump(self, node, st: State):
+        """[dead-code] An unconditional jump in unreachable code: 'break', 'continue', the loop's own
+        back jump, or a jump the compiler put there for structure (over an exception handler)."""
+        if st.depth != 0:
+            raise DecompileError('a jump in the middle of an expression', node)
+        target = node.jump
+        loop = st.ctx.loop
+        if loop is not None:
+            if target is loop.header:
+                if node.offset >= max(loop.header.back_jumps, default=-1):
+                    self._dead_no_claim = True  # the loop's own back jump: the body ends here
+                    return TERMINATED
+                st.emit(ast.Continue())
+                return TERMINATED
+            # a jump out of the loop is a 'break'; one to dead code that the loop region contains
+            # (over an exception handler, say) is just structure
+            if target is loop.break_target or not self.analysis.dominates(loop.header, target) \
+                    or (not target.dead and target not in loop.nodes) \
+                    or (target.dead and (target is self.implicit_end or target.offset > loop.end_offset)):
+                st.emit(ast.Break())
+                return TERMINATED
+        return target
+
+    op_JUMP_ABSOLUTE = op_JUMP_FORWARD = _dead_jump
+
+    def ends_function(self, first: InstructionNode) -> bool:
+        """[dead-code] The statement starting at ``first`` is followed by the function's unreachable
+        implicit 'return None': it is the last statement and every path through it ends in a jump."""
+        return self.graph.dead_code and self.implicit_end is not None and any(
+            entry is self.implicit_end and self.analysis.dominates(first, anchor)
+            for anchor, entry in self.graph.dead_entries)
+
+    def dead_continuation(self, head: InstructionNode, ctx: Ctx) -> Optional[InstructionNode]:
+        """[dead-code] The unreachable code that follows the statement starting at ``head``, if any.
+
+        The statement that ended the block consists of nodes ``head`` dominates; the
+        dead region hanging off the first such node (in layout order) is the code
+        the author wrote after the jump statement.
+        """
+        dominates = self.analysis.dominates
+        toplevel = ctx.start is self.graph.entry
+        candidates = [entry for anchor, entry in self.graph.dead_entries
+                      if entry not in self._dead_claimed and anchor.offset >= head.offset and dominates(head, anchor)
+                      and (toplevel or entry is not self.implicit_end)]
+        if not candidates:
+            return None
+        entry = min(candidates, key=lambda n: n.offset)
+        self._dead_claimed.add(entry)
+        return entry
 
     def parse_branch(self, start: InstructionNode, owners, stack: list, ctx: Ctx) -> Block:
         """Parse the block entered through the edges coming from ``owners`` only.
@@ -233,6 +348,10 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             unshared = len(node.preds) == 1
         exclusive = entry or unshared
         if index < 0:
+            if self.graph.dead_code and node is self.function_end:
+                # [dead-code] falling through to the end of the function is not a 'return' statement:
+                # written as one, the implicit return would become unreachable
+                return None
             # every frame block is closed: 'return <constant>'
             # (the compiler emits these two instructions for one 'return' only: nothing else leads to them)
             if node.opname == 'LOAD_CONST' and node.next is not None and node.next.opname == 'RETURN_VALUE' \
@@ -242,9 +361,10 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             return None
         fb = ctx.fblocks[index]
         if fb.is_loop and not past_loop:
+            node = self.follow_dead_jumps(node)  # [dead-code]
             if node is fb.header:
                 return [ast.Continue()]
-            after = fb.unwind(self, node, False)
+            after = self.follow_dead_jumps(fb.unwind(self, node, False))  # [dead-code] (the follow)
             if after is None or (after is not node and not exclusive):
                 return None
             if fb.break_target is not None:

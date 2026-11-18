@@ -23,7 +23,11 @@ def main(argv=None) -> int:
     parser.add_argument('-v', action='store_true')
     parser.add_argument('-x', action='store_true')
     parser.add_argument('-l', action='store_true')
+    parser.add_argument('-d', '--dead-code', action='store_true', help='run with decompiler.options.dead_code')
     args = parser.parse_args(argv)
+    if args.dead_code:
+        from decompiler import options
+        options.dead_code = True
 
     modes = available_modes()
     if args.m and args.m != 'both':

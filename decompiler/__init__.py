@@ -17,6 +17,7 @@ from typing import List
 
 from loguru import logger
 
+from decompiler import options
 from decompiler.emit import keep_on_one_line, peephole_skipped
 from decompiler.errors import DecompileError
 from decompiler.graph.dump import (CO_ASYNC_GENERATOR, CO_GENERATOR, docstring_of, dump_code)
@@ -52,10 +53,13 @@ class Decompiler:
     module is still produced; ``failures`` lists what was skipped.
     """
 
-    def __init__(self, code: CodeType, toplevel: bool = True, strict: bool = True, peephole: bool = None):
+    def __init__(self, code: CodeType, toplevel: bool = True, strict: bool = True, peephole: bool = None,
+                 dead_code: bool = None):
         self.code = code
         self.toplevel = toplevel
         self.strict = strict
+        #: [dead-code] also decompile unreachable code (default: decompiler.options.dead_code)
+        self.dead_code = options.dead_code if dead_code is None else dead_code
         #: whether the code went through the peephole optimizer (guessed from the code when not given);
         #: only matters for a few spellings that compile differently without it
         self.peephole = _looks_optimized(code) if peephole is None else peephole

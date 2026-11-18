@@ -345,7 +345,10 @@ class ControlMixin:
         else:
             test, first, second = cond.test, cond.true, cond.false
         body = self.parse_branch(first, cond.nodes, stack, ctx)
-        if statement and body.terminated and not body.implicit:
+        # [dead-code] 'if a: return 1 else: return 2' at the end of a function leaves the implicit
+        # 'return None' behind (unreachable); 'if a: return 1' + 'return 2' does not
+        ends_function = self.ends_function(cond.first)
+        if statement and body.terminated and not body.implicit and not ends_function:
             # 'if test: ...; return' followed by the rest: no need to nest the rest in an else
             # (not when the body ends by reaching the implicit end of a module or class body)
             st.emit(ast.If(test=test, body=body.stmts or [ast.Pass()], orelse=[]))
@@ -390,7 +393,8 @@ class ControlMixin:
                 orelse.exit = None
 
         after = body.exit if body.exit is not None else orelse.exit
-        if body.terminated and orelse.stmts and not body.implicit:
+        dead_else = ends_function and body.terminated and orelse.terminated  # [dead-code]
+        if body.terminated and orelse.stmts and not body.implicit and not dead_else:
             st.emit(ast.If(test=test, body=body.stmts, orelse=[]))
             st.stmts.extend(orelse.stmts)
         elif not body.stmts and orelse.stmts:

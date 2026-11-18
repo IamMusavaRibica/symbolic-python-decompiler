@@ -11,13 +11,14 @@ from typing import Callable, Optional
 
 from decompiler.graph.builder import CodeGraph
 from decompiler.graph.dump import _arg_text, _children, _opname
-from decompiler.graph.node import InstructionNode, NEXT, TRUE, FALSE, JUMP
+from decompiler.graph.node import InstructionNode, NEXT, TRUE, FALSE, JUMP, DEAD
 
 _EDGE_STYLE = {
     NEXT: dict(style='dashed', color='black'),
     TRUE: dict(style='solid', color='#008800', label='T'),
     FALSE: dict(style='solid', color='#cc0000', label='F'),
     JUMP: dict(style='solid', color='black', label='J'),
+    DEAD: dict(style='dotted', color='gray50', label='dead'),  # [dead-code]
 }
 
 
@@ -76,7 +77,10 @@ def render_graph(graph: CodeGraph, filename: str, directory: str = '_graphs',
         for node in run:
             dot_nodes[node] = box
     for run in runs:
-        for label, succ in run[-1].successors():
+        edges = list(run[-1].successors())
+        if run[-1].dead_next is not None:  # [dead-code]
+            edges.append((DEAD, run[-1].dead_next))
+        for label, succ in edges:
             dot.add_edge(pydotplus.Edge(dot_nodes[run[-1]], dot_nodes[succ], fontname='Consolas',
                                         **_EDGE_STYLE[label]))
 

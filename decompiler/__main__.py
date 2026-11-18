@@ -53,9 +53,14 @@ def main(argv=None) -> int:
     parser.add_argument('-n', '--nopeephole', action='store_true')
     parser.add_argument('-r', '--render', action='store_true')
     parser.add_argument('-v', '--verbose', action='store_true')
+    parser.add_argument('--dead-code', action='store_true',
+                        help='also decompile (and compare) unreachable code')
     parser.add_argument('-s', '--strict', action='store_true',
                         help='stop at the first body that cannot be decompiled instead of marking it')
     args = parser.parse_args(argv)
+    if args.dead_code:
+        from decompiler import options
+        options.dead_code = True
     if args.verbose:
         from loguru import logger
         logger.enable('decompiler')

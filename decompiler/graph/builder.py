@@ -23,13 +23,16 @@ from typing import Dict, List, Optional, Tuple
 
 import networkx
 
-from decompiler.graph.node import (InstructionNode, OP_ENTRY, OP_SPIN, NEXT, TRUE, FALSE, JUMP, EDGE_ORDER)
+from decompiler import options
+from decompiler.graph.node import (InstructionNode, OP_ENTRY, OP_SPIN, NEXT, TRUE, FALSE, JUMP, DEAD, EDGE_ORDER)
 
 UNCONDITIONAL_JUMPS = frozenset({'JUMP_FORWARD', 'JUMP_ABSOLUTE'})
 #: instructions after which execution never continues with the following instruction
 NO_FALLTHROUGH = UNCONDITIONAL_JUMPS | {'RETURN_VALUE', 'RAISE_VARARGS', 'RERAISE'}
 #: instructions that are skipped as if they were not there
 TRANSPARENT = frozenset({'EXTENDED_ARG', 'NOP'})
+#: [dead-code] instructions after which the physically following instruction is unreachable
+TERMINATORS = frozenset({'RETURN_VALUE', 'RAISE_VARARGS', 'RERAISE'})
 HAS_JUMP_TARGET = frozenset(dis.opname[op] for op in dis.hasjabs + dis.hasjrel)
 
 
@@ -41,8 +44,13 @@ class CodeGraph:
     successors/predecessors directly (``node.out`` / ``node.preds``).
     """
 
-    def __init__(self, code: CodeType):
+    def __init__(self, code: CodeType, dead_code: Optional[bool] = None):
         self.code: CodeType = code
+        #: [dead-code] whether unreachable instructions are part of the graph (see decompiler.options)
+        self.dead_code: bool = options.dead_code if dead_code is None else dead_code
+        #: [dead-code] (anchor, entry): the live instruction after which the dead region at entry follows
+        self.dead_entries: List[Tuple[InstructionNode, InstructionNode]] = []
+        self._dead_phase = False
         self.nx = networkx.MultiDiGraph()
         self.entry = InstructionNode(OP_ENTRY, None, None, -1)
         self.nx.add_node(self.entry)
@@ -54,7 +62,14 @@ class CodeGraph:
 
     # -- construction -------------------------------------------------------
     def _add_edge(self, src: InstructionNode, dst: InstructionNode, label: str):
-        src.out[label] = dst
+        if label == DEAD:
+            src.dead_next = dst  # [dead-code]
+        else:
+            src.out[label] = dst
+        if src.dead and not dst.dead:
+            # [dead-code] dead code flowing into live code: followed, but no predecessor of the live
+            # node and no part of the dominator tree, so that the live structure is as without it
+            return
         dst.preds.append((src, label))
         self.nx.add_edge(src, dst, key=label, label=label)
 
@@ -72,7 +87,7 @@ class CodeGraph:
                 current = i.starts_line
             linenos[i.offset] = current
 
-        def resolve(offset: Optional[int]) -> Tuple[Optional[object], List[int]]:
+        def resolve(offset: Optional[int], thread_jumps: bool = True) -> Tuple[Optional[object], List[int]]:
             """Follow transparent instructions and unconditional jumps starting at ``offset``.
 
             Returns ``(target, jumps)``: target is the offset of the first real
@@ -87,7 +102,8 @@ class CodeGraph:
                     return None, path
                 if instr.opname in TRANSPARENT:
                     offset = following.get(offset)
-                elif instr.opname in UNCONDITIONAL_JUMPS:
+                elif instr.opname in UNCONDITIONAL_JUMPS and (thread_jumps or offset in live_jumps):
+                    # ([dead-code] a jump that live code goes through is never a node)
                     if offset in path:
                         return ('spin', min(path[path.index(offset):])), path
                     path.append(offset)
@@ -112,12 +128,21 @@ class CodeGraph:
             node = self._by_offset.get(target)
             if node is None:
                 node = self._by_offset[target] = InstructionNode.from_instruction(by_offset[target], linenos[target])
+                node.dead = self._dead_phase  # [dead-code]
                 self.nx.add_node(node)
                 queue.append(node)
             return node
 
+        threaded: Dict[int, int] = {}  # [dead-code] node offset -> first jump its fall-through went through
+        live_jumps = set()  # [dead-code] offsets of the jumps live code goes through
+
         def connect(src: InstructionNode, raw_offset: Optional[int], label: str, origin: int):
-            target, jumps = resolve(raw_offset)
+            # [dead-code] in dead regions jumps are kept as nodes: a dead 'break' / 'continue' is one
+            target, jumps = resolve(raw_offset, not self._dead_phase)
+            if jumps and origin >= 0 and raw_offset == following.get(origin):
+                threaded[origin] = jumps[0]  # [dead-code]
+            if not self._dead_phase:
+                live_jumps.update(jumps)  # [dead-code]
             dst = node_for(target)
             if dst is None:
                 return
@@ -130,24 +155,62 @@ class CodeGraph:
                 if not jumps and label != NEXT and origin >= 0 and dst.offset <= origin:
                     dst.back_jumps.append(origin)
 
-        connect(self.entry, offsets[0], NEXT, -1)
-        while queue:
-            node = queue.popleft()
-            name = node.opname
-            fall = following.get(node.offset)
-            if name in HAS_JUMP_TARGET:
-                target = node.argval
-                if name == 'POP_JUMP_IF_FALSE':
-                    connect(node, fall, TRUE, node.offset)
-                    connect(node, target, FALSE, node.offset)
-                elif name == 'POP_JUMP_IF_TRUE':
-                    connect(node, target, TRUE, node.offset)
-                    connect(node, fall, FALSE, node.offset)
-                else:
+        def drain():
+            while queue:
+                node = queue.popleft()
+                name = node.opname
+                fall = following.get(node.offset)
+                if name in UNCONDITIONAL_JUMPS:
+                    connect(node, node.argval, JUMP, node.offset)  # [dead-code] (only dead ones are nodes)
+                elif name in HAS_JUMP_TARGET:
+                    target = node.argval
+                    if name == 'POP_JUMP_IF_FALSE':
+                        connect(node, fall, TRUE, node.offset)
+                        connect(node, target, FALSE, node.offset)
+                    elif name == 'POP_JUMP_IF_TRUE':
+                        connect(node, target, TRUE, node.offset)
+                        connect(node, fall, FALSE, node.offset)
+                    else:
+                        connect(node, fall, NEXT, node.offset)
+                        connect(node, target, JUMP, node.offset)
+                elif name not in NO_FALLTHROUGH:
                     connect(node, fall, NEXT, node.offset)
-                    connect(node, target, JUMP, node.offset)
-            elif name not in NO_FALLTHROUGH:
-                connect(node, fall, NEXT, node.offset)
+
+        connect(self.entry, offsets[0], NEXT, -1)
+        drain()
+        if self.dead_code:
+            # [dead-code] Unreachable instructions: whatever physically follows a terminator or an
+            # unconditional jump and is not reached otherwise.  Dead regions are built like live
+            # code (their own terminators get continuations too), in order of discovery.
+            self._dead_phase = True
+            examined = set()
+            while True:
+                anchors = [n for n in self._by_offset.values() if n not in examined]
+                if not anchors:
+                    break
+                for anchor in sorted(anchors, key=lambda n: n.offset):
+                    examined.add(anchor)
+                    if anchor.opname in TERMINATORS or anchor.opname in UNCONDITIONAL_JUMPS:
+                        after = following.get(anchor.offset)
+                    elif anchor.offset in threaded:
+                        after = following.get(threaded[anchor.offset])
+                    else:
+                        continue
+                    target, _ = resolve(after, False)
+                    if target is None or isinstance(target, tuple) or target in self._by_offset:
+                        continue
+                    # A region of nothing but jumps (a loop's back jump after a 'break', the jump
+                    # over an exception handler after a 'return') is left out: which of two
+                    # spellings with the same graph was written decides whether it exists.
+                    probe = target
+                    while probe is not None and by_offset[probe].opname in UNCONDITIONAL_JUMPS | TRANSPARENT:
+                        probe = following.get(probe)
+                    if probe is None or probe in self._by_offset:
+                        continue
+                    entry = node_for(target)
+                    self._add_edge(anchor, entry, DEAD)
+                    self.dead_entries.append((anchor, entry))
+                    drain()
         self._undo_jump_simplification()
 
     def _remove_edges(self, node: InstructionNode):
@@ -200,6 +263,8 @@ class CodeGraph:
             seen.add(node)
             node.index = len(order)
             order.append(node)
+            if node.dead_next is not None and node.dead_next not in seen:  # [dead-code] numbered last
+                stack.append(node.dead_next)
             for label in reversed(EDGE_ORDER):
                 succ = node.out.get(label)
                 if succ is not None and succ not in seen:
@@ -222,5 +287,5 @@ class CodeGraph:
         return iter(self.nodes)
 
 
-def build_graph(code: CodeType) -> CodeGraph:
-    return CodeGraph(code)
+def build_graph(code: CodeType, dead_code: Optional[bool] = None) -> CodeGraph:
+    return CodeGraph(code, dead_code)

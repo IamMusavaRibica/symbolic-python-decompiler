@@ -35,8 +35,12 @@ def main(argv=None) -> int:
     parser.add_argument('-c', '--collapse', action='store_true',
                         help='draw each run of straight-line instructions as one box')
     parser.add_argument('--no-open', action='store_true')
+    parser.add_argument('--dead-code', action='store_true', help='include unreachable code (dotted edges)')
     args = parser.parse_args(argv)
 
+    if args.dead_code:
+        from decompiler import options
+        options.dead_code = True
     code = load(args.file, args.nopeephole)
     written = []
     names = []
