@@ -1,11 +1,11 @@
 """Render the instruction graph of a file without decompiling anything.
 
-    python tools/build_graph.py FILE [-k NAME] [-d DIR] [--no-open]
+    python tools/build_graph.py FILE [-k NAME] [-d DIR] [-c] [--no-open]
 
 FILE is a .py (compiled first) or a .pyc.  One .svg per code object is written to
 DIR (default: _graphs), named after the code object's qualified path; -k keeps only
 the code objects whose name contains NAME.  The files are opened afterwards unless
---no-open is given.  Needs pydotplus and the graphviz executables (``dot``).
+--no-open is given; -c draws straight-line runs as one box.  Needs pydotplus and the graphviz executables (``dot``).
 """
 import argparse
 import os
@@ -32,6 +32,8 @@ def main(argv=None) -> int:
     parser.add_argument('-k', '--keep', default=None, help='only code objects whose name contains this')
     parser.add_argument('-d', '--directory', default='_graphs')
     parser.add_argument('-n', '--nopeephole', action='store_true', help='compile without the peephole optimizer')
+    parser.add_argument('-c', '--collapse', action='store_true',
+                        help='draw each run of straight-line instructions as one box')
     parser.add_argument('--no-open', action='store_true')
     args = parser.parse_args(argv)
 
@@ -44,7 +46,7 @@ def main(argv=None) -> int:
             continue
         safe = ''.join(c if c.isalnum() or c in '._-' else '_' for c in name)
         filename = f'{safe}.svg'
-        render_graph(build_graph(obj), filename, args.directory)
+        render_graph(build_graph(obj), filename, args.directory, collapse=args.collapse)
         written.append(os.path.join(args.directory, filename))
         print(written[-1])
     if not written:
