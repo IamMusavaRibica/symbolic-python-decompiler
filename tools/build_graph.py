@@ -37,7 +37,9 @@ def main(argv=None) -> int:
 
     code = load(args.file, args.nopeephole)
     written = []
+    names = []
     for name, obj in code_objects(code):
+        names.append(name)
         if args.keep is not None and args.keep not in name:
             continue
         safe = ''.join(c if c.isalnum() or c in '._-' else '_' for c in name)
@@ -46,7 +48,9 @@ def main(argv=None) -> int:
         written.append(os.path.join(args.directory, filename))
         print(written[-1])
     if not written:
-        print('no code object matched', file=sys.stderr)
+        print(f'no code object name contains {args.keep!r}; the names are:', file=sys.stderr)
+        for name in names:
+            print('   ', name, file=sys.stderr)
         return 1
     if not args.no_open:
         for path in written:
