@@ -202,8 +202,9 @@ class CodeGraph:
                         continue
                     existing = self._by_offset.get(target)
                     if existing is not None:
-                        if existing.dead:
-                            # a dead region reached from a second terminator as well
+                        if existing.dead and not anchor.dead:
+                            # a dead region reached from a second (live) terminator as well; a dead
+                            # anchor's physical successor inside a region is the region's own business
                             self._add_edge(anchor, existing, DEAD)
                             self.dead_entries.append((anchor, existing))
                         continue

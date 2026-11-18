@@ -142,15 +142,21 @@ class ExceptionMixin:
 
         orelse: List[ast.stmt] = []
         fell_through = None
-        if self.graph.dead_code and after_body is None and len(continuations) == 1:
-            # [dead-code] the body ended in a jump statement and the handlers meet somewhere: that is
-            # where the statement ends.  A handler that itself jumped has no continuation here (its
-            # dead epilogue told), except for 'return <constant>', which leaves none behind.
+        if self.graph.dead_code and len(continuations) == 1 and continuations[0] is not after_body:
+            # [dead-code] A handler that jumped has no continuation here (its dead epilogue told),
+            # except for 'return <constant>', which leaves none behind.  So a handler whose
+            # continuation is the loop's own jump fell through: the statement ends there, and
+            # what follows the body (if anything) is an else clause.
             jump = self.resolve_jump(continuations[0], ctx, len(continuations[0].preds) == 1)
             if jump is None or not isinstance(jump[0], ast.Return):
                 fell_through = continuations[0]
         if fell_through is not None:
             join = fell_through
+            if after_body is not None:
+                orelse_ctx = ctx.evolve(stops=ctx.stops | {join})
+                block = self.parse_branch(after_body, {body.exit}, stack, orelse_ctx)
+                self.close_block(block, orelse_ctx, accept=(join,))
+                orelse = block.stmts
         elif after_body is not None and after_body in continuations:
             join = after_body
         else:
@@ -168,7 +174,7 @@ class ExceptionMixin:
                     orelse = block.stmts
             else:
                 join = after_body
-                dead_join = self.dead_try_join(node, handlers, after_body, ctx)
+                dead_join = self.dead_try_join(node, handlers, after_body, ctx)                     if after_body is not None and self.owned(after_body, {body.exit}) else None
                 if dead_join is not None and dead_join is not after_body:
                     join = dead_join
                     orelse_ctx = ctx.evolve(stops=ctx.stops | {join})

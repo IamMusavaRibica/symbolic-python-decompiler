@@ -532,6 +532,7 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         differs) and are not followed.  TERMINATED when the body never completes.
         """
         fb.copy_nodes = set()
+        fb.copy_ends = set()
         if fb.terminal is None:
             return TERMINATED
         seen = {}
@@ -539,7 +540,9 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         found = None
         while work:
             canon, copy = work.pop()
+            copy = self.follow_dead_jumps(copy)  # [dead-code] (a dead copy keeps its jumps as nodes)
             if canon is fb.terminal:
+                fb.copy_ends.add(copy)
                 if found is None:
                     found = copy
                 elif found is not copy and not (found.opname == copy.opname == 'RETURN_VALUE'):
@@ -559,9 +562,12 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         if self.graph.dead_code:
             # [dead-code] unreachable code inside the copy (the epilogue of a try statement left with
             # 'break') belongs to the copy, which is never read as statements
-            # (not the one hanging off the copy's last node: that follows the jump statement itself)
+            # (not the one hanging off the copy's last node: that follows the jump statement itself).
+            # What hangs off a RETURN_VALUE that ends the copy is a fragment of the epilogue that
+            # the optimizer left standing at a jump target.
             self._dead_claimed.update(entry for anchor, entry in self.graph.dead_entries
-                                      if anchor in fb.copy_nodes and anchor.next is not found)
+                                      if (anchor in fb.copy_nodes and anchor.next is not found)
+                                      or (anchor in fb.copy_ends and anchor.opname == 'RETURN_VALUE'))
         return found if found is not None else TERMINATED
 
     @staticmethod

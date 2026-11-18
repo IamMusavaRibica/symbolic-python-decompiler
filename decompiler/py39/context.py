@@ -81,6 +81,9 @@ class FinallyTryBlock(FBlock):
         #: [dead-code] the body's normal exit is unreachable (its epilogue exists as dead code): every
         #: live way out of the body is a jump statement
         self.dead_normal_exit = None  # the dead epilogue's first node when so
+        #: [dead-code] the nodes where the inlined copies skipped last ended (several RETURN_VALUEs
+        #: when the optimizer duplicated the return into the copy's branches)
+        self.copy_ends = set()
 
     def unwind(self, walker, node, preserve_tos):
         node = follow(node, 'POP_BLOCK')
