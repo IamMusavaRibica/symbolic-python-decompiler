@@ -197,7 +197,14 @@ class CodeGraph:
                     else:
                         continue
                     target, _ = resolve(after, False)
-                    if target is None or isinstance(target, tuple) or target in self._by_offset:
+                    if target is None or isinstance(target, tuple):
+                        continue
+                    existing = self._by_offset.get(target)
+                    if existing is not None:
+                        if existing.dead:
+                            # a dead region reached from a second terminator as well
+                            self._add_edge(anchor, existing, DEAD)
+                            self.dead_entries.append((anchor, existing))
                         continue
                     # A region of nothing but jumps (a loop's back jump after a 'break', the jump
                     # over an exception handler after a 'return') is left out: which of two

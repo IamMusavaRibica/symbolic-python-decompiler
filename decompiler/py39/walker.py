@@ -227,6 +227,21 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             entry is self.implicit_end and self.analysis.dominates(first, anchor)
             for anchor, entry in self.graph.dead_entries)
 
+    def closes_with_dead(self, first: InstructionNode):
+        """[dead-code] The unreachable region that follows the code starting at ``first`` directly:
+        the one hanging off its last (in layout) live instruction, or None."""
+        if not self.graph.dead_code:
+            return None
+        dominates = self.analysis.dominates
+        live = [n for n in self.graph.nodes if not n.dead and not n.is_pseudo and dominates(first, n)]
+        if not live:
+            return None
+        last = max(live, key=lambda n: n.offset)
+        for anchor, entry in self.graph.dead_entries:
+            if anchor is last:
+                return entry
+        return None
+
     def dead_continuation(self, head: InstructionNode, ctx: Ctx) -> Optional[InstructionNode]:
         """[dead-code] The unreachable code that follows the statement starting at ``head``, if any.
 
@@ -348,6 +363,7 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             unshared = len(node.preds) == 1
         exclusive = entry or unshared
         if index < 0:
+            node = self.follow_dead_jumps(node)  # [dead-code]
             if self.graph.dead_code and node is self.function_end:
                 # [dead-code] falling through to the end of the function is not a 'return' statement:
                 # written as one, the implicit return would become unreachable
@@ -384,6 +400,7 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         after = fb.unwind(self, node, False)
         if after is None or after is TERMINATED or (after is not node and not exclusive):
             return None
+        after = self.follow_dead_jumps(after)  # [dead-code]
         return self._resolve(after, index - 1, ctx, past_loop,
                              fb.copy_nodes if isinstance(fb, FinallyTryBlock) else None)
 
