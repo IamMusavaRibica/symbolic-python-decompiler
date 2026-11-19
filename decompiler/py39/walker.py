@@ -166,6 +166,18 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             if result is TERMINATED:
                 if self.graph.dead_code and not self._dead_no_claim:  # [dead-code]
                     continuation = self.dead_continuation(statement[0], ctx)
+                    fragment = self.return_fragment(continuation)
+                    while fragment is not None:
+                        # the rest of a return statement whose finally copy jumped (the value's
+                        # clean-up and the RETURN_VALUE): what follows it is the continuation
+                        continuation = fragment.dead_next
+                        if continuation is None or continuation in self._dead_claimed:
+                            continuation = None
+                            break
+                        self._dead_claimed.add(continuation)
+                        fragment = self.return_fragment(continuation)
+                        if continuation.opname in ('WITH_EXCEPT_START', 'DUP_TOP'):
+                            continuation = None  # an exception handler of the copy, not statements
                     if continuation is not None and continuation.opname in BLOCK_END_OPS:
                         # the epilogue of the construct the jump statement left: the block stops
                         # there, and the construct reads where the epilogue goes (at the top level
@@ -340,6 +352,29 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         for anchor, entry in self.graph.dead_entries:
             if anchor is last:
                 return entry
+        return None
+
+    def drop_foreign_epilogue(self, block: Block, expected: str) -> None:
+        """[dead-code] A block that stopped at a dead region which is not its construct's epilogue
+        (``expected``) but the entry of an exception handler (one of a dead copy of a with statement,
+        say) has simply ended; the region is nobody's continuation."""
+        if self.graph.dead_code and block.exit is not None and block.exit.dead and block.exit.opname != expected                 and block.exit.opname in ('WITH_EXCEPT_START', 'DUP_TOP', 'POP_TOP'):
+            self._dead_claimed.add(block.exit)
+            block.exit = None
+
+    @staticmethod
+    def return_fragment(node: Optional[InstructionNode]) -> Optional[InstructionNode]:
+        """[dead-code] The RETURN_VALUE ending the fragment ``(ROT_TWO | POP_TOP)* RETURN_VALUE`` that
+        starts at ``node``: the remainder of a return statement whose inlined finally body jumped
+        away with the value still on the stack.  None when ``node`` starts no such fragment."""
+        for _ in range(6):
+            if node is None or not node.dead:
+                return None
+            if node.opname == 'RETURN_VALUE':
+                return node
+            if node.opname not in ('ROT_TWO', 'ROT_THREE', 'ROT_FOUR', 'POP_TOP'):
+                return None
+            node = node.next
         return None
 
     def dead_continuation(self, head: InstructionNode, ctx: Ctx, claim: bool = True) -> Optional[InstructionNode]:

@@ -97,7 +97,9 @@ class ExceptionMixin:
 
         body_ctx = ctx.evolve(start=node.next, push=fb)
         body = self.parse_block(node.next, stack, body_ctx)
+        logger.debug('try/finally at {}: body exit {}, dead normal exit {}, terminal {}', node, body.exit, fb.dead_normal_exit, fb.terminal)
         after = TERMINATED
+        self.drop_foreign_epilogue(body, 'POP_BLOCK')
         if body.exit is not None:
             if body.exit.opname != 'POP_BLOCK':
                 raise DecompileError('unsupported end of a try body', body.exit)
@@ -107,6 +109,8 @@ class ExceptionMixin:
                     self.append_jump(body, jump, body_ctx)
         if body.exit is not None:
             after = self.skip_finally_copy(fb, body.exit.next)
+            if body.exit.dead:
+                self._dead_claimed.add(body.exit)  # [dead-code] (consumed as the body's epilogue)
             if body.exit.dead and after is not TERMINATED and not self.follow_dead_jumps(after).dead:
                 after = TERMINATED  # [dead-code] a dead epilogue that leads to live code: see parse_handlers
         elif fb.dead_normal_exit is not None and fb.dead_normal_exit not in self._dead_claimed:
@@ -125,6 +129,7 @@ class ExceptionMixin:
         body_ctx = ctx.evolve(start=node.next, push=TryExceptBlock())
         body = self.parse_block(node.next, stack, body_ctx)
         after_body = None
+        self.drop_foreign_epilogue(body, 'POP_BLOCK')
         if body.exit is not None:
             if body.exit.opname != 'POP_BLOCK':
                 raise DecompileError('unsupported end of a try body', body.exit)
@@ -137,6 +142,7 @@ class ExceptionMixin:
             if body.exit.dead:
                 # [dead-code] the body ended in a jump statement; its epilogue leads to the code after
                 # the statement, which is dead too (then it is what follows) or live (then nothing does)
+                self._dead_claimed.add(body.exit)
                 after_body = self.follow_dead_jumps(after_body)
                 if after_body is not TERMINATED and not after_body.dead:
                     after_body = None
@@ -271,6 +277,7 @@ class ExceptionMixin:
             block = self.parse_block(node, saved, handler_ctx)
             after = None
             dead_after = None
+            self.drop_foreign_epilogue(block, 'POP_EXCEPT')
             if block.exit is not None:
                 after = cleanup.unwind(self, block.exit, False)
                 if after is None:
@@ -279,6 +286,7 @@ class ExceptionMixin:
                     # [dead-code] the handler ended in a jump statement; what follows is only the
                     # epilogue the compiler emits anyway.  It leads to live code (then the handler
                     # does not continue) or to dead code (then that is what follows the statement)
+                    self._dead_claimed.add(block.exit)
                     after = self.follow_dead_jumps(after)
                     if not after.dead:
                         dead_after, after = after, None
@@ -335,6 +343,7 @@ class ExceptionMixin:
         join = follow(test.true, 'POP_TOP', 'POP_TOP', 'POP_TOP', 'POP_EXCEPT', 'POP_TOP')
         if join is None:
             raise DecompileError('unsupported with statement', node)
+        self.drop_foreign_epilogue(body, 'POP_BLOCK')
         if body.exit is not None:
             after = fb.unwind(self, body.exit, False)
             if self.graph.dead_code and after is not None and after is not TERMINATED:
