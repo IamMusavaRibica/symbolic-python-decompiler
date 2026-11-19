@@ -134,3 +134,5 @@ or removed as one piece; with the option off the decompiler behaves exactly as b
 
 If you find code that does not decompile correctly, please open an issue with the source: it is better to tackle
 decompilation issues early than having to deal with them later.
+
+Engineering notes for maintainers and agents (architecture, the dead-code machinery, debugging): [agents.md](agents.md).
