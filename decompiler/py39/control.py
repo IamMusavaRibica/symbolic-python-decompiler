@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import ast
+
+from loguru import logger
 from typing import List, Optional, Set
 
 from decompiler.errors import DecompileError
@@ -381,10 +383,19 @@ class ControlMixin:
                 self.check_missing_loop(body.exit, ctx)
                 self.check_missing_loop(orelse.exit, ctx)
                 raise DecompileError('the branches of an if never meet', cond.last)
+            logger.debug('if at {}: body exit {} -> {}, else exit {} -> {}', cond.last, body.exit, body_jump, orelse.exit, orelse_jump)
             if body_jump is not None and orelse_jump is not None:
                 # Both could be jumps.  The one placed last in the bytecode may just as well be the
                 # way the enclosing statement ends; whoever owns that statement decides.
-                if body.exit.offset > orelse.exit.offset:
+                loop = ctx.loop
+                if self.graph.dead_code and loop is not None and orelse.exit is loop.header                         and self.through_loop_end(cond.last, second, loop):
+                    # [dead-code] the else side reaches the loop header through the loop's own back
+                    # jump: it is the end of the loop body, not a 'continue' (which would leave that
+                    # jump dead)
+                    orelse_jump = None
+                elif self.graph.dead_code and loop is not None and body.exit is loop.header                         and self.through_loop_end(cond.last, first, loop):
+                    body_jump = None  # [dead-code] (the mirror image)
+                elif body.exit.offset > orelse.exit.offset:
                     body_jump = None
                 else:
                     orelse_jump = None
@@ -412,6 +423,14 @@ class ControlMixin:
         else:
             st.emit(ast.If(test=test, body=body.stmts or [ast.Pass()], orelse=orelse.stmts))
         return after if after is not None else TERMINATED
+
+    def through_loop_end(self, last: InstructionNode, start: InstructionNode, loop) -> bool:
+        """[dead-code] The branch of ``last`` that begins at ``start`` reaches the loop header through
+        the jump that ends the loop body (directly, or at the end of its straight-line code)."""
+        if start is loop.header:
+            return last.argval == loop.end_offset
+        return any(p.threaded_via == loop.end_offset and self.analysis.dominates(start, p)
+                   for p, _ in loop.header.preds)
 
     def parse_assert(self, test: ast.expr, failing: InstructionNode, passing: InstructionNode, st: State):
         failed = self.parse_block(failing, st.stack, st.ctx.evolve(start=failing))

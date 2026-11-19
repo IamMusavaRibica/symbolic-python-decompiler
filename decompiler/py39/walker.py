@@ -35,13 +35,15 @@ body, or a ``break``/``continue``/``return`` (see ``resolve_jump``).
 from __future__ import annotations
 
 import ast
+
+from loguru import logger
 from types import CodeType
 from typing import List, Optional
 
 from decompiler.errors import DecompileError, SyntheticLoop
 from decompiler.graph.analysis import GraphAnalysis
 from decompiler.graph.builder import build_graph
-from decompiler.graph.node import InstructionNode, OP_SPIN
+from decompiler.graph.node import FALSE, JUMP, TRUE, InstructionNode, OP_SPIN
 from decompiler.py39.context import (TERMINATED, Block, Ctx, FinallyTryBlock, LoopBlock, State)
 from decompiler.py39.control import ControlMixin
 from decompiler.py39.definitions import DefinitionMixin
@@ -122,9 +124,15 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         node = start
         first = entering
         statement = (node, list(st.stack), 0)  # where the current statement started
+        last = None
         while True:
             if node is None:
+                if self.graph.dead_code and last is not None and last.dead:
+                    # [dead-code] unreachable code at the very end of the code object: the compiler
+                    # adds no implicit return behind a block that already returned
+                    return Block(st.stmts, None, st.stack, True)
                 raise DecompileError('control flow runs off the end of the code')
+            last = node
             # [dead-code] a POP_BLOCK followed (after the clean-up code) by unreachable code is not the
             # normal end of a try body but a jump statement: the normal end is never followed by one
             jump_copy = self.graph.dead_code and not first and st.depth == 0 \
@@ -158,12 +166,17 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             if result is TERMINATED:
                 if self.graph.dead_code and not self._dead_no_claim:  # [dead-code]
                     continuation = self.dead_continuation(statement[0], ctx)
+                    if continuation is not None and continuation.opname in BLOCK_END_OPS:
+                        # the epilogue of the construct the jump statement left: the block stops
+                        # there, and the construct reads where the epilogue goes
+                        return Block(st.stmts, continuation, st.stack, st.implicit_end)
                     if continuation is not None:
                         # parsed tentatively: a fragment of unreachable clean-up code that is not a
                         # statement continuation is dropped rather than failing the whole function
                         try:
                             tail = self.parse_block(continuation, statement[1], ctx)
-                        except DecompileError:
+                        except DecompileError as e:
+                            logger.debug('dead continuation at {} dropped: {}', continuation, e)
                             tail = None
                         if tail is not None and tail.exit is self.implicit_end and ctx.start is not self.graph.entry:
                             tail = None
@@ -224,6 +237,52 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             node = after
         return True
 
+    def handler_epilogue(self, start: InstructionNode, end: Optional[InstructionNode]):
+        """[dead-code] Where the dead epilogue (POP_EXCEPT and a jump) of an except clause that ended
+        in a jump statement leads, when that is live code (the clause then has no continuation);
+        None otherwise.  The clause's code starts at ``start`` and ends before ``end``."""
+        for anchor, entry in self.graph.dead_entries:
+            if entry.opname == 'POP_EXCEPT' and anchor.offset >= start.offset                     and (end is None or anchor.offset < end.offset) and self.analysis.dominates(start, anchor):
+                after = self.follow_dead_jumps(entry.next)
+                if after is not None and after is not TERMINATED and not after.dead:
+                    return after
+        return None
+
+    def handler_jumped(self, start: InstructionNode, ctx: Ctx) -> bool:
+        """[dead-code] The clean-up chain at ``start`` (an except clause's continuation that resolves
+        to a jump statement, just unwound) is followed by the dead epilogue of a handler that jumped:
+        a POP_EXCEPT leading to live code.  Told apart from a handler that fell through into the
+        loop's own clean-up, which has no such epilogue."""
+        chain = set()
+        node = start
+        for _ in range(200):
+            if node is None or node.dead or node in chain:
+                break
+            chain.add(node)
+            if node.threaded or any(fb.is_loop and node is fb.header for fb in ctx.fblocks):
+                break
+            node = node.next
+        for fb in ctx.fblocks:
+            if isinstance(fb, FinallyTryBlock):
+                chain |= fb.copy_nodes | fb.copy_ends
+        anchored = {}
+        for anchor, entry in self.graph.dead_entries:
+            anchored.setdefault(anchor, []).append(entry)
+        work = [anchor for anchor in anchored if anchor in chain]
+        seen = set()
+        while work:
+            for entry in anchored[work.pop()]:
+                if entry in seen:
+                    continue
+                seen.add(entry)
+                if entry.opname == 'POP_EXCEPT':
+                    after = self.follow_dead_jumps(entry.next)
+                    if after is not None and after is not TERMINATED and not after.dead:
+                        return True
+                if entry in anchored:
+                    work.append(entry)  # a dead jump anchors the region behind it
+        return False
+
     @staticmethod
     def follow_dead_jumps(node):
         """[dead-code] A dead unconditional jump stands for where it goes."""
@@ -280,7 +339,7 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
                 return entry
         return None
 
-    def dead_continuation(self, head: InstructionNode, ctx: Ctx) -> Optional[InstructionNode]:
+    def dead_continuation(self, head: InstructionNode, ctx: Ctx, claim: bool = True) -> Optional[InstructionNode]:
         """[dead-code] The unreachable code that follows the statement starting at ``head``, if any.
 
         The statement that ended the block consists of nodes ``head`` dominates; the
@@ -295,7 +354,8 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         if not candidates:
             return None
         entry = min(candidates, key=lambda n: n.offset)
-        self._dead_claimed.add(entry)
+        if claim:
+            self._dead_claimed.add(entry)
         return entry
 
     def parse_branch(self, start: InstructionNode, owners, stack: list, ctx: Ctx) -> Block:
@@ -429,6 +489,12 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
                 return self._resolve(after, index - 1, ctx, True)
             # No 'break' seen yet.  Code that only this path runs and that returns is a
             # 'return'; anything else outside the loop is where 'break' goes.
+            if self.graph.dead_code and not after.dead and after not in fb.nodes and after.offset > fb.end_offset                     and all(p.threaded or self.is_taken_edge(p, label) for p, label in after.preds):
+                # [dead-code] laid out behind the loop and reached by jumps only: the code after the
+                # loop, which 'break' reaches (a 'return' written inside the loop would sit inside
+                # it, as the fall-through of its test, and leave a dead implicit return behind)
+                fb.break_target = after
+                return [ast.Break()]
             if len(after.preds) == 1:
                 as_return = self._resolve(after, index - 1, ctx, True)
                 if as_return is not None:
@@ -443,6 +509,13 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         after = self.follow_dead_jumps(after)  # [dead-code]
         return self._resolve(after, index - 1, ctx, past_loop,
                              fb.copy_nodes if isinstance(fb, FinallyTryBlock) else None)
+
+    @staticmethod
+    def is_taken_edge(node: InstructionNode, label: str) -> bool:
+        """[dead-code] The edge ``label`` out of ``node`` is the jump, not the fall-through."""
+        if label == JUMP:
+            return True
+        return (node.opname == 'POP_JUMP_IF_FALSE' and label == FALSE)             or (node.opname == 'POP_JUMP_IF_TRUE' and label == TRUE)
 
     def close_block(self, block: Block, ctx: Ctx, accept=()) -> None:
         """Make sure ``block`` ends in a way its construct expects.
@@ -468,7 +541,7 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             continuation = self.dead_continuation(exit, ctx)
             if continuation is not None and continuation.opname not in BLOCK_END_OPS:
                 # (a region that starts with clean-up code is the epilogue of the construct the
-                # jump left, not statements)
+                # jump left, not statements; see handler_epilogue)
                 tail = self.parse_block(continuation, block.stack, ctx.evolve(start=continuation))
                 block.stmts.extend(tail.stmts)
                 block.exit = tail.exit

@@ -23,6 +23,8 @@ exception path is the one that gets parsed, the others are only skipped over
 from __future__ import annotations
 
 import ast
+
+from loguru import logger
 from typing import List, Optional
 
 from decompiler.errors import DecompileError
@@ -126,6 +128,11 @@ class ExceptionMixin:
         if body.exit is not None:
             if body.exit.opname != 'POP_BLOCK':
                 raise DecompileError('unsupported end of a try body', body.exit)
+            if self.graph.dead_code and not body.exit.dead and not body.exit.threaded and node.jump.opname == 'POP_TOP':
+                # [dead-code] the body falls into the code behind it instead of jumping over the
+                # handler: that code is the inlined copy of a finally body (one that starts with a
+                # jump statement or return looks like a bare except clause otherwise)
+                raise DecompileError('a try body that does not jump over its handler', body.exit)
             after_body = body.exit.next
             if body.exit.dead:
                 # [dead-code] the body ended in a jump statement; its epilogue leads to the code after
@@ -148,7 +155,7 @@ class ExceptionMixin:
             # continuation is the loop's own jump fell through: the statement ends there, and
             # what follows the body (if anything) is an else clause.
             jump = self.resolve_jump(continuations[0], ctx, len(continuations[0].preds) == 1)
-            if jump is None or not isinstance(jump[0], ast.Return):
+            if (jump is None or not isinstance(jump[0], ast.Return))                     and not self.handler_jumped(continuations[0], ctx):
                 fell_through = continuations[0]
         if fell_through is not None:
             join = fell_through
@@ -181,6 +188,7 @@ class ExceptionMixin:
                     block = self.parse_branch(after_body, {body.exit}, stack, orelse_ctx)
                     self.close_block(block, orelse_ctx, accept=(join,))
                     orelse = block.stmts
+        logger.debug('try at {}: after_body {}, continuations {}, dead_after {}, fell_through {}, join {}', node, after_body, continuations, [h.dead_after for h in handlers], fell_through, join)
         for handler in handlers:
             if handler.after is not None and handler.after is not join:
                 jump = self.resolve_jump(handler.after, ctx, len(handler.after.preds) == 1)
@@ -274,6 +282,10 @@ class ExceptionMixin:
                     after = self.follow_dead_jumps(after)
                     if not after.dead:
                         dead_after, after = after, None
+            elif self.graph.dead_code:
+                # [dead-code] the clause ended in a jump statement that a nested construct closed
+                # (so its epilogue was not what the block stopped at); the epilogue is still there
+                dead_after = self.handler_epilogue(node, following)
             handlers.append(Handler(exc_type, name, block, after, dead_after))
             if following is None:
                 break  # a bare 'except:' is always the last one
@@ -323,8 +335,12 @@ class ExceptionMixin:
         join = follow(test.true, 'POP_TOP', 'POP_TOP', 'POP_TOP', 'POP_EXCEPT', 'POP_TOP')
         if join is None:
             raise DecompileError('unsupported with statement', node)
-        if body.exit is not None and fb.unwind(self, body.exit, False) is not join:
-            self.close_block(body, body_ctx)
+        if body.exit is not None:
+            after = fb.unwind(self, body.exit, False)
+            if self.graph.dead_code and after is not None and after is not TERMINATED:
+                after = self.follow_dead_jumps(after)  # [dead-code] a dead epilogue ends in a jump node
+            if after is not join:
+                self.close_block(body, body_ctx)
 
         item = ast.withitem(context_expr=context_expr, optional_vars=target)
         cls = ast.AsyncWith if is_async else ast.With

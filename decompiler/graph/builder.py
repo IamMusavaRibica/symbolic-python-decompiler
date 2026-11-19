@@ -142,6 +142,7 @@ class CodeGraph:
             if jumps and origin >= 0 and raw_offset == following.get(origin):
                 threaded[origin] = jumps[0]  # [dead-code]
                 src.threaded = True
+                src.threaded_via = jumps[0]  # [dead-code]
             if not self._dead_phase:
                 live_jumps.update(jumps)  # [dead-code]
             dst = node_for(target)
@@ -193,6 +194,10 @@ class CodeGraph:
                     examined.add(anchor)
                     if anchor.opname in TERMINATORS or anchor.opname in UNCONDITIONAL_JUMPS:
                         after = following.get(anchor.offset)
+                        while after in live_jumps:
+                            # a live jump that a branch was threaded through: what follows it is
+                            # the terminator's unreachable successor just the same
+                            after = following.get(after)
                     elif anchor.offset in threaded:
                         after = following.get(threaded[anchor.offset])
                     else:

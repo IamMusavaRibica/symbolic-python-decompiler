@@ -55,7 +55,7 @@ class InstructionNode:
     """
 
     __slots__ = ('opcode', 'opname', 'arg', 'argval', 'offset', 'lineno',
-                 'out', 'preds', 'back_jumps', 'index', 'dead', 'dead_next', 'threaded', '__weakref__')
+                 'out', 'preds', 'back_jumps', 'index', 'dead', 'dead_next', 'threaded', 'threaded_via', '__weakref__')
 
     def __init__(self, opcode: int, arg, argval, offset: int, lineno: Optional[int] = None):
         self.opcode: int = opcode
@@ -79,6 +79,8 @@ class InstructionNode:
         self.dead_next: Optional['InstructionNode'] = None
         #: [dead-code] the fall-through of this instruction went through an unconditional jump
         self.threaded: bool = False
+        #: [dead-code] offset of the unconditional jump that fall-through went through
+        self.threaded_via: Optional[int] = None
 
     @classmethod
     def from_instruction(cls, instr: dis.Instruction, lineno: Optional[int] = None) -> 'InstructionNode':
