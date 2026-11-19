@@ -428,7 +428,9 @@ class ControlMixin:
         """[dead-code] The branch of ``last`` that begins at ``start`` reaches the loop header through
         the jump that ends the loop body (directly, or at the end of its straight-line code)."""
         if start is loop.header:
-            return last.argval == loop.end_offset
+            # (the optimizer threads a jump to the loop's end jump into one to the header, and
+            # erases the end jump behind a return: a jump straight to the header reads the same)
+            return last.argval in (loop.end_offset, loop.header.offset)
         return any(p.threaded_via == loop.end_offset and self.analysis.dominates(start, p)
                    for p, _ in loop.header.preds)
 

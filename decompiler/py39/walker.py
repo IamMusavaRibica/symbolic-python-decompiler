@@ -168,8 +168,11 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
                     continuation = self.dead_continuation(statement[0], ctx)
                     if continuation is not None and continuation.opname in BLOCK_END_OPS:
                         # the epilogue of the construct the jump statement left: the block stops
-                        # there, and the construct reads where the epilogue goes
-                        return Block(st.stmts, continuation, st.stack, st.implicit_end)
+                        # there, and the construct reads where the epilogue goes (at the top level
+                        # there is no such construct: the epilogue was nobody's continuation)
+                        if ctx.fblocks:
+                            return Block(st.stmts, continuation, st.stack, st.implicit_end)
+                        continuation = None
                     if continuation is not None:
                         # parsed tentatively: a fragment of unreachable clean-up code that is not a
                         # statement continuation is dropped rather than failing the whole function
@@ -354,6 +357,7 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         if not candidates:
             return None
         entry = min(candidates, key=lambda n: n.offset)
+        logger.debug('dead region at {} continues the statement at {} (claimed: {})', entry, head, claim)
         if claim:
             self._dead_claimed.add(entry)
         return entry
@@ -364,9 +368,19 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         When ``start`` can also be reached from elsewhere it is not part of
         the branch: the branch is empty and ``start`` is its exit.
         """
-        if start in ctx.stops or not self.owned(start, owners):
+        if start in ctx.stops or not self.owned(start, owners) or self.behind_loop(start, ctx):
             return Block([], start, list(stack))
         return self.parse_block(start, stack, ctx.evolve(start=start))
+
+    def behind_loop(self, node: InstructionNode, ctx: Ctx) -> bool:
+        """[dead-code] ``node`` is live code laid out behind the innermost loop that only jumps lead
+        to: the code after the loop, where 'break' goes, even when one path alone reaches it
+        (parsed inline it would be a 'return' inside the loop, with a dead implicit return behind)."""
+        loop = ctx.loop
+        if not self.graph.dead_code or loop is None or node.dead or node in loop.nodes or node.is_pseudo:
+            return False
+        # (reached through unconditional jumps only: fall-through edges that were threaded)
+        return node.offset > loop.end_offset and bool(node.preds)             and all(p.threaded and not self.is_taken_edge(p, label) for p, label in node.preds)
 
     def owned(self, node: InstructionNode, owners) -> bool:
         return all(p in owners for p in self.analysis.forward_preds(node))
@@ -489,11 +503,8 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
                 return self._resolve(after, index - 1, ctx, True)
             # No 'break' seen yet.  Code that only this path runs and that returns is a
             # 'return'; anything else outside the loop is where 'break' goes.
-            if self.graph.dead_code and not after.dead and after not in fb.nodes and after.offset > fb.end_offset                     and all(p.threaded or self.is_taken_edge(p, label) for p, label in after.preds):
-                # [dead-code] laid out behind the loop and reached by jumps only: the code after the
-                # loop, which 'break' reaches (a 'return' written inside the loop would sit inside
-                # it, as the fall-through of its test, and leave a dead implicit return behind)
-                fb.break_target = after
+            if self.behind_loop(after, ctx):
+                fb.break_target = after  # [dead-code]
                 return [ast.Break()]
             if len(after.preds) == 1:
                 as_return = self._resolve(after, index - 1, ctx, True)
