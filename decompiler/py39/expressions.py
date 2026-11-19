@@ -303,10 +303,10 @@ class ExpressionMixin:
         sequence = self.pop_expr(st, node)
         if type(sequence) is ast.Tuple:
             args = list(sequence.elts)
-        elif isinstance(sequence, ast.Constant) and isinstance(sequence.value, tuple) and sequence.value \
-                and self.decompiler.peephole:
-            # 'f(1, 2, **k)': the peephole optimizer folds the tuple of arguments.  Without it a
-            # constant tuple can only be a starred one, 'f(*(1, 2), **k)'; so can an empty one.
+        elif isinstance(sequence, ast.Constant) and isinstance(sequence.value, tuple) and sequence.value:
+            # 'f(1, 2, **k)': the peephole optimizer folds the tuple of arguments (without it a
+            # constant tuple could only be a starred one, 'f(*(1, 2), **k)', but the comparison
+            # does not tell the two apart); an empty constant tuple can only be a starred one
             args = [self.const(v) for v in sequence.value]
         else:
             args = [ast.Starred(value=sequence, ctx=ast.Load())]

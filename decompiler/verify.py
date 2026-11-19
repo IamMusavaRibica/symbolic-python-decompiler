@@ -37,15 +37,11 @@ class RoundTrip(NamedTuple):
         return self.ok
 
 
-def verify_code(code: CodeType, compiler: Callable[..., CodeType] = COMPILERS[STOCK],
-                peephole: Optional[bool] = None) -> RoundTrip:
-    """Decompile ``code``, recompile the result with ``compiler`` and compare the graphs.
-
-    ``peephole`` says whether ``compiler`` runs the peephole optimizer (guessed when None).
-    """
+def verify_code(code: CodeType, compiler: Callable[..., CodeType] = COMPILERS[STOCK]) -> RoundTrip:
+    """Decompile ``code``, recompile the result with ``compiler`` and compare the graphs."""
     from decompiler import decompile
     try:
-        decompiled = decompile(code, peephole)
+        decompiled = decompile(code)
     except RecursionError:
         return RoundTrip(False, 'decompile', 'RecursionError', None)
     except Exception:
@@ -67,4 +63,4 @@ def verify_source(source: str, mode: str = STOCK, flags: int = 0) -> RoundTrip:
         code = compiler(source, flags)
     except Exception as e:
         return RoundTrip(False, 'compile', f'{type(e).__name__}: {e}', None)
-    return verify_code(code, compiler, mode == STOCK)
+    return verify_code(code, compiler)

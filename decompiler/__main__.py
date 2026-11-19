@@ -73,8 +73,7 @@ def main(argv=None) -> int:
         return 0
     if args.check:
         from decompiler.verify import COMPILERS, NOPEEPHOLE, STOCK, verify_code
-        result = verify_code(code, COMPILERS[NOPEEPHOLE if args.nopeephole else STOCK],
-                             False if args.nopeephole else None)
+        result = verify_code(code, COMPILERS[NOPEEPHOLE if args.nopeephole else STOCK])
         if result.decompiled is not None:
             print(result.decompiled)
         if result.ok:
@@ -83,7 +82,7 @@ def main(argv=None) -> int:
         print(f'# FAILED at stage {result.stage!r}', file=sys.stderr)
         print(result.detail, file=sys.stderr)
         return 1
-    decompiler = Decompiler(code, strict=args.strict, peephole=False if args.nopeephole else None)
+    decompiler = Decompiler(code, strict=args.strict)
     sys.stdout.write(decompiler.get_source_code())
     for name, error in decompiler.failures:
         print(f'# {name or "<module>"}: {error}', file=sys.stderr)

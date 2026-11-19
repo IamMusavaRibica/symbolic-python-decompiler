@@ -90,6 +90,10 @@ Test cases are plain Python snippets separated by `# %% name` lines. Every case 
 running interpreter, and (when available) a CPython build without peephole optimizer, whose bytecode is closer to
 what `compile.c` literally emits. The second one is found through `DECOMPILER_NOPEEPHOLE_PYTHON`
 (see [decompiler/utils/bytecode.py](decompiler/utils/bytecode.py), helper script: [tools/python_compile.py](tools/python_compile.py)).
+Before two graphs are compared, both code objects go through a port of 3.9's peephole optimizer
+([decompiler/graph/peephole.py](decompiler/graph/peephole.py)): the stock compiler skips the optimizer on a code object
+with a source line of 255+ bytes of bytecode, so the same program compiles differently depending on its line
+layout, and the comparison must not care.
 
 State of things: the standard library of 3.9 round-trips completely (641 files, 19 873 code objects), and so do
 sympy, django, sqlalchemy, twisted, botocore, pygments, astroid and jedi (108 182 code objects). The CPython test
@@ -109,7 +113,7 @@ of two equivalent spellings was written), and spellings that only differ in unre
 by it (`if a: return 1 else: return 2` leaves the function's implicit `return None` behind,
 `if a: return 1` + `return 2` does not).
 
-State of things: the test cases pass 378 of 402 runs in this mode, the standard library 19 787 of 19 873
+State of things: the test cases pass 384 of 404 runs in this mode, the standard library 19 787 of 19 873
 code objects (99.6%). What fails are mostly try statements whose body or handlers end in a jump statement:
 their dead epilogues (`POP_BLOCK`, `POP_EXCEPT`, the jump over the handlers) are sometimes read as statements,
 which either yields a different spelling (`compare: graphs differ`) or no parse (`cannot tell where control

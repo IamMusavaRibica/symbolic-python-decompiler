@@ -104,7 +104,7 @@ def check_file(args):
             result['fatal'] = 'skipped: does not compile'
             return result
         result['objects'] = sum(1 for _ in walk(code))
-        decompiler = Decompiler(code, strict=False, peephole=not nopeephole)
+        decompiler = Decompiler(code, strict=False)
         try:
             text = decompiler.get_source_code()
         except Exception as e:

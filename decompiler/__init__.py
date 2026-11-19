@@ -18,7 +18,6 @@ from typing import List
 from loguru import logger
 
 from decompiler import options
-from decompiler.emit import keep_on_one_line, peephole_skipped
 from decompiler.errors import DecompileError
 from decompiler.graph.dump import (CO_ASYNC_GENERATOR, CO_GENERATOR, docstring_of, dump_code)
 
@@ -53,16 +52,12 @@ class Decompiler:
     module is still produced; ``failures`` lists what was skipped.
     """
 
-    def __init__(self, code: CodeType, toplevel: bool = True, strict: bool = True, peephole: bool = None,
-                 dead_code: bool = None):
+    def __init__(self, code: CodeType, toplevel: bool = True, strict: bool = True, dead_code: bool = None):
         self.code = code
         self.toplevel = toplevel
         self.strict = strict
         #: [dead-code] also decompile unreachable code (default: decompiler.options.dead_code)
         self.dead_code = options.dead_code if dead_code is None else dead_code
-        #: whether the code went through the peephole optimizer (guessed from the code when not given);
-        #: only matters for a few spellings that compile differently without it
-        self.peephole = _looks_optimized(code) if peephole is None else peephole
         self.tree: ast.Module = None
         #: (qualified name of the code object, error) for every body that was skipped
         self.failures: List[tuple] = []
@@ -114,9 +109,6 @@ class Decompiler:
         elif kind == 'module':
             stmts = self._module_body(walker, stmts)
         stmts = self._restore_annotations(walker, stmts, kind)
-        if self.peephole and peephole_skipped(code):
-            # compiled from a line so long that the optimizer gave up: it has to stay that long
-            keep_on_one_line(stmts)
         return stmts
 
     def _function_body(self, code, walker, stmts):
@@ -261,18 +253,11 @@ class Decompiler:
         return result
 
 
-def decompile(code: CodeType, peephole: bool = None) -> str:
+def decompile(code: CodeType) -> str:
     """Decompile a code object to source code."""
-    return Decompiler(code, peephole=peephole).get_source_code()
+    return Decompiler(code).get_source_code()
 
 
-def _looks_optimized(code: CodeType) -> bool:
-    """False when the bytecode has shapes the peephole optimizer never leaves behind."""
-    import dis
-    if peephole_skipped(code):
-        # the stock optimizer gave up on this code object (a source line over 255 bytes of bytecode),
-        # so its unoptimized shapes say nothing about the compiler; look at the nested ones only
-        return all(_looks_optimized(c) for c in code.co_consts if isinstance(c, CodeType))
     jumps = ('JUMP_FORWARD', 'JUMP_ABSOLUTE')
     instructions = list(dis.get_instructions(code))
     by_offset = {i.offset: i for i in instructions}
