@@ -499,3 +499,77 @@ def h(self, key):
         return False
     else:
         return True
+
+# %% dead-code shapes: a return inside try whose finally holds a with statement that continues, inside with inside for
+def f(xs):
+    for x in xs:
+        with a:
+            try:
+                with b as y:
+                    return y
+            finally:
+                with e:
+                    continue
+
+# %% dead-code shapes: a return inside try whose finally holds try/except/finally with returns in body and handler
+def f(x):
+    try:
+        return x
+    finally:
+        try:
+            if x:
+                return 2
+        except Exception:
+            return 3
+        finally:
+            x = 0
+
+# %% dead-code shapes: try/except/else with continue and break inside while True, then a return
+def f():
+    while True:
+        try:
+            x = g()
+        except E:
+            continue
+        else:
+            break
+    return x
+
+# %% dead-code shapes: handler that continues through a finally body with a branch
+def f(data):
+    for cell in data:
+        try:
+            a()
+        except E:
+            pass
+            continue
+        finally:
+            assert data
+
+# %% dead-code shapes: try/except/else in while True: handler continues, else breaks
+def f():
+    while True:
+        try:
+            x = get()
+        except Empty:
+            continue
+        else:
+            if x is None:
+                break
+            handle(x)
+    return "left"
+
+# %% dead-code shapes: a return inside try whose finally continues
+def l3(c):
+    for j in c:
+        try:
+            return j
+        finally:
+            continue
+
+# %% dead-code shapes: try whose finally returns (same live code as a bare except that returns)
+def gen(xs):
+    try:
+        yield 1
+    finally:
+        return

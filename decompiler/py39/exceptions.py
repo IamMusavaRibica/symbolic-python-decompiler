@@ -228,7 +228,7 @@ class ExceptionMixin:
             jump = self.resolve_jump(after_body, ctx, len(after_body.preds) == 1)
             if jump is not None and not isinstance(jump[0], ast.Return):
                 return None
-            return self.closes_with_dead(after_body)
+            return self.closes_with_dead(after_body, own=True)
         return None
 
     def parse_handlers(self, entry, st: State) -> List[Handler]:

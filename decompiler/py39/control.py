@@ -352,7 +352,7 @@ class ControlMixin:
         # implicit 'return None', the epilogue of a try body) keeps it: the end of the else clause is
         # a jump target, which stops the optimizer from wiping the code after the return.  Written as
         # 'if a: return 1' + 'return 2' that code is lost.
-        ends_function = self.closes_with_dead(second) is not None
+        ends_function = self.closes_with_dead(second, own=True) is not None
         if statement and body.terminated and not body.implicit and not ends_function:
             # 'if test: ...; return' followed by the rest: no need to nest the rest in an else
             # (not when the body ends by reaching the implicit end of a module or class body)

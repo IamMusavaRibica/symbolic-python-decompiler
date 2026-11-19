@@ -53,6 +53,7 @@ from decompiler.py39.statements import StatementMixin
 from decompiler.py39.values import Accumulator, IterValue, is_plain
 
 #: instructions that end a block when met at statement level
+SETUP_OPS = frozenset({'SETUP_FINALLY', 'SETUP_WITH', 'SETUP_ASYNC_WITH'})  # [dead-code]
 BLOCK_END_OPS = frozenset({'POP_BLOCK', 'POP_EXCEPT', 'RERAISE', 'END_ASYNC_FOR', 'WITH_EXCEPT_START', 'POP_TOP'})
 #: first instruction of the clean-up code of 'return <value>' inside a frame block
 RETURN_UNWIND_OPS = frozenset({'POP_BLOCK', 'ROT_TWO', 'ROT_FOUR'})
@@ -337,9 +338,14 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             entry is self.implicit_end and self.analysis.dominates(first, anchor)
             for anchor, entry in self.graph.dead_entries)
 
-    def closes_with_dead(self, first: InstructionNode):
+    def closes_with_dead(self, first: InstructionNode, own: bool = False):
         """[dead-code] The unreachable region that follows the code starting at ``first`` directly:
-        the one hanging off its last (in layout) live instruction, or None."""
+        the one hanging off its last (in layout) live instruction, or None.
+
+        With ``own``, only when that instruction is not the RERAISE closing the exception handler
+        of a statement that encloses ``first``: what hangs off that one (the function's implicit
+        return, say) follows the enclosing statement, not the code at ``first``.
+        """
         if not self.graph.dead_code:
             return None
         dominates = self.analysis.dominates
@@ -349,6 +355,11 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         last = max(live, key=lambda n: n.offset)
         if last.threaded:
             return None  # the code after it is where its jump went, not what follows it in layout
+        if own and last.opname == 'RERAISE':
+            handlers = [n for n in self.graph.nodes if n.opname in SETUP_OPS and not n.dead
+                        and n.jump is not None and dominates(n.jump, last)]
+            if handlers and not dominates(first, max(handlers, key=lambda n: n.jump.offset)):
+                return None
         for anchor, entry in self.graph.dead_entries:
             if anchor is last:
                 return entry
@@ -666,7 +677,12 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         found = None
         while work:
             canon, copy = work.pop()
-            copy = self.follow_dead_jumps(copy)  # [dead-code] (a dead copy keeps its jumps as nodes)
+            while copy is not None and copy is not TERMINATED and copy.dead                     and copy.opname in ('JUMP_ABSOLUTE', 'JUMP_FORWARD'):
+                # [dead-code] a dead copy keeps its jumps as nodes: they are part of the copy (what
+                # hangs off them, such as the dead exit of a with statement whose body jumped, is
+                # the copy's own business), and stand for where they go
+                fb.copy_nodes.add(copy)
+                copy = copy.jump
             if canon is fb.terminal:
                 fb.copy_ends.add(copy)
                 if found is None:
@@ -680,6 +696,19 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             seen[canon] = copy
             fb.copy_nodes.add(copy)
             if not self._same_instruction(canon, copy):
+                if self.graph.dead_code:
+                    # [dead-code] the copies part here: a jump statement leaving the finally body
+                    # unwinds different blocks in each.  The copy's clean-up chain, up to where
+                    # the jump goes, is still the copy's code (what hangs off it, such as the dead
+                    # exit of a with statement the jump left, is the copy's business)
+                    chain = copy
+                    while chain is not None and chain is not TERMINATED and not chain.is_pseudo                             and chain not in fb.copy_nodes | {copy} and self.analysis.dominates(start, chain):
+                        fb.copy_nodes.add(chain)
+                        chain = chain.next
+                    chain = copy.next
+                    while chain is not None and chain is not TERMINATED and not chain.is_pseudo                             and chain not in fb.copy_nodes and self.analysis.dominates(start, chain):
+                        fb.copy_nodes.add(chain)
+                        chain = chain.next
                 continue
             for label, succ in canon.successors():
                 other = copy.out.get(label)
@@ -690,10 +719,13 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             # 'break') belongs to the copy, which is never read as statements
             # (not the one hanging off the copy's last node: that follows the jump statement itself).
             # What hangs off a RETURN_VALUE that ends the copy is a fragment of the epilogue that
-            # the optimizer left standing at a jump target.
+            # the optimizer left standing at a jump target -- except for the return statement's
+            # own RETURN_VALUE, the one laid out last: what hangs off that one follows the statement.
+            returns = [n for n in fb.copy_ends if n.opname == 'RETURN_VALUE']
+            own = max(returns, key=lambda n: n.offset) if returns else None
             self._dead_claimed.update(entry for anchor, entry in self.graph.dead_entries
                                       if (anchor in fb.copy_nodes and anchor.next is not found)
-                                      or (anchor in fb.copy_ends and anchor.opname == 'RETURN_VALUE'))
+                                      or (anchor in returns and anchor is not own))
         return found if found is not None else TERMINATED
 
     @staticmethod
