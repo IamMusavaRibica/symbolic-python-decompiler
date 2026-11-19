@@ -109,9 +109,11 @@ of two equivalent spellings was written), and spellings that only differ in unre
 by it (`if a: return 1 else: return 2` leaves the function's implicit `return None` behind,
 `if a: return 1` + `return 2` does not).
 
-State of things: the test cases pass 361 of 402 runs in this mode, the standard library 19 599 of 19 873
-code objects. What fails are mostly try statements whose body or handlers end in a jump statement: their
-dead epilogues (`POP_BLOCK`, `POP_EXCEPT`, the jump over the handlers) sometimes end up read as statements.
+State of things: the test cases pass 378 of 402 runs in this mode, the standard library 19 787 of 19 873
+code objects (99.6%). What fails are mostly try statements whose body or handlers end in a jump statement:
+their dead epilogues (`POP_BLOCK`, `POP_EXCEPT`, the jump over the handlers) are sometimes read as statements,
+which either yields a different spelling (`compare: graphs differ`) or no parse (`cannot tell where control
+goes from here`).
 Everything that exists only for this mode is marked `[dead-code]` in the source, so it can be found, fixed
 or removed as one piece; with the option off the decompiler behaves exactly as before.
 

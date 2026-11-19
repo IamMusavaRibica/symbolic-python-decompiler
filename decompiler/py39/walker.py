@@ -159,10 +159,17 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
                 if self.graph.dead_code and not self._dead_no_claim:  # [dead-code]
                     continuation = self.dead_continuation(statement[0], ctx)
                     if continuation is not None:
-                        st.stack[:] = statement[1]
-                        st.implicit_end = False
-                        node = continuation
-                        continue
+                        # parsed tentatively: a fragment of unreachable clean-up code that is not a
+                        # statement continuation is dropped rather than failing the whole function
+                        try:
+                            tail = self.parse_block(continuation, statement[1], ctx)
+                        except DecompileError:
+                            tail = None
+                        if tail is not None and tail.exit is self.implicit_end and ctx.start is not self.graph.entry:
+                            tail = None
+                        if tail is not None:
+                            st.stmts.extend(tail.stmts)
+                            return Block(st.stmts, tail.exit, tail.stack, tail.implicit)
                 self._dead_no_claim = False
                 return Block(st.stmts, None, st.stack, st.implicit_end)
             node = node.next if result is None else result
