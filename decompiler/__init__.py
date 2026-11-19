@@ -269,6 +269,10 @@ def decompile(code: CodeType, peephole: bool = None) -> str:
 def _looks_optimized(code: CodeType) -> bool:
     """False when the bytecode has shapes the peephole optimizer never leaves behind."""
     import dis
+    if peephole_skipped(code):
+        # the stock optimizer gave up on this code object (a source line over 255 bytes of bytecode),
+        # so its unoptimized shapes say nothing about the compiler; look at the nested ones only
+        return all(_looks_optimized(c) for c in code.co_consts if isinstance(c, CodeType))
     jumps = ('JUMP_FORWARD', 'JUMP_ABSOLUTE')
     instructions = list(dis.get_instructions(code))
     by_offset = {i.offset: i for i in instructions}

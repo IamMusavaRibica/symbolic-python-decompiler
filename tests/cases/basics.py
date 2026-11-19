@@ -181,3 +181,8 @@ f = lambda: (yield)
 # %% global statement at module level
 global g
 g = 1
+
+# %% a line over 255 bytes of bytecode makes the peephole optimizer skip the module: its unfolded defaults tuple must not be taken for a peephole-less compiler
+names = [alpha_0, alpha_1, alpha_2, alpha_3, alpha_4, alpha_5, alpha_6, alpha_7, alpha_8, alpha_9, alpha_10, alpha_11, alpha_12, alpha_13, alpha_14, alpha_15, alpha_16, alpha_17, alpha_18, alpha_19, alpha_20, alpha_21, alpha_22, alpha_23, alpha_24, alpha_25, alpha_26, alpha_27, alpha_28, alpha_29, alpha_30, alpha_31, alpha_32, alpha_33, alpha_34, alpha_35, alpha_36, alpha_37, alpha_38, alpha_39, alpha_40, alpha_41, alpha_42, alpha_43, alpha_44, alpha_45, alpha_46, alpha_47, alpha_48, alpha_49, alpha_50, alpha_51, alpha_52, alpha_53, alpha_54, alpha_55, alpha_56, alpha_57, alpha_58, alpha_59, alpha_60, alpha_61, alpha_62, alpha_63, alpha_64, alpha_65, alpha_66, alpha_67, alpha_68, alpha_69, alpha_70, alpha_71, alpha_72, alpha_73, alpha_74, alpha_75, alpha_76, alpha_77, alpha_78, alpha_79, alpha_80, alpha_81, alpha_82, alpha_83, alpha_84, alpha_85, alpha_86, alpha_87, alpha_88, alpha_89, alpha_90, alpha_91, alpha_92, alpha_93, alpha_94, alpha_95, alpha_96, alpha_97, alpha_98, alpha_99, alpha_100, alpha_101, alpha_102, alpha_103, alpha_104, alpha_105, alpha_106, alpha_107, alpha_108, alpha_109, alpha_110, alpha_111, alpha_112, alpha_113, alpha_114, alpha_115, alpha_116, alpha_117, alpha_118, alpha_119, alpha_120, alpha_121, alpha_122, alpha_123, alpha_124, alpha_125, alpha_126, alpha_127, alpha_128, alpha_129, alpha_130, alpha_131, alpha_132, alpha_133, alpha_134, alpha_135, alpha_136, alpha_137, alpha_138, alpha_139]
+def later(a=(1, 2), b=None):
+    return x if a else y
