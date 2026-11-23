@@ -111,6 +111,14 @@ class ExceptionMixin:
             after = self.skip_finally_copy(fb, body.exit.next)
             if body.exit.dead:
                 self._dead_claimed.add(body.exit)  # [dead-code] (consumed as the body's epilogue)
+            elif self.graph.dead_code and not body.exit.threaded and after is not TERMINATED                     and fb.terminal is not None and fb.terminal.dead_next is not None                     and fb.terminal.dead_next not in self.graph.dead_gapped                     and after.opname == 'LOAD_CONST' and after.next is not None and after.next.opname == 'RETURN_VALUE'                     and len(after.preds) == 1 and len(after.next.preds) == 1:
+                # [dead-code] 'return <constant>' as the last statement of the body: the normal exit
+                # ran the copy and returned, and what follows the statement is the dead code behind
+                # the finally body's RERAISE (written after the statement, nothing would follow it)
+                body.stmts.append(self.make_return(self.const(after.argval)))
+                after = self.follow_dead_jumps(fb.terminal.dead_next)
+                if not after.dead:
+                    after = TERMINATED
             if body.exit.dead and after is not TERMINATED and not self.follow_dead_jumps(after).dead:
                 after = TERMINATED  # [dead-code] a dead epilogue that leads to live code: see parse_handlers
         elif fb.dead_normal_exit is not None and fb.dead_normal_exit not in self._dead_claimed:

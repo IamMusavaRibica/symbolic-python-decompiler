@@ -558,6 +558,10 @@ class ControlMixin:
             fb.break_target = normal_exit
             return
         joins = [node for node, count in votes.items() if count >= 2]
+        if self.graph.dead_code:
+            # [dead-code] the code after the loop is laid out after it: a join inside the loop's
+            # layout is where two terminating paths of the body meet, not where 'break' goes
+            joins = [j for j in joins if not fb.header.offset < j.offset < fb.end_offset]
         if len(joins) > 1:
             # Several joins: the body of 'if a or b:' is entered from two tests as well.  Every
             # path that leaves the loop without ending comes by the code after the loop, so that
