@@ -65,8 +65,9 @@ def own_dump(code: CodeType) -> str:
 
 def compare_trees(original: CodeType, recompiled: CodeType, path: str, mismatches: list, counter: list):
     """Compare two code objects level by level; record the path of every code object that differs."""
+    from decompiler.graph.peephole import optimize_code
     counter[0] += 1
-    same = own_dump(original) == own_dump(recompiled)
+    same = own_dump(original) == own_dump(recompiled)         or own_dump(optimize_code(original)) == own_dump(optimize_code(recompiled))  # as compare_code
     if not same:
         mismatches.append(path)
     a, b = children_of(original), children_of(recompiled)
@@ -142,7 +143,7 @@ def explain(path: str, nopeephole: bool, only: str = '', context: int = 3) -> No
         source = f.read()
     compiler = compile_without_peephole if nopeephole else (lambda src, flags=0: compile_source(src, path, flags))
     code = compiler(source)
-    decompiler = Decompiler(code, strict=False, peephole=not nopeephole)
+    decompiler = Decompiler(code, strict=False)
     text = decompiler.get_source_code()
     for name, error in decompiler.failures:
         if only in name:

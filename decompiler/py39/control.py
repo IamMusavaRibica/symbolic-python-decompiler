@@ -347,7 +347,13 @@ class ControlMixin:
             test, first, second = negate(cond.test), cond.false, cond.true
         else:
             test, first, second = cond.test, cond.true, cond.false
-        body = self.parse_branch(first, cond.nodes, stack, ctx)
+        body_ctx = ctx
+        if self.graph.dead_code and statement and second.offset > first.offset and not second.is_pseudo:
+            # [dead-code] the body is laid out before the code at ``second`` (an else clause or what
+            # follows the statement): code behind that is not the body's, even when the body alone
+            # reaches it ('if a: x else: raise' + 'return y': the return is after the statement)
+            body_ctx = ctx.evolve(bound=second.offset)
+        body = self.parse_branch(first, cond.nodes, stack, body_ctx)
         # [dead-code] 'if a: return 1 else: return 2' followed by unreachable code (the function's
         # implicit 'return None', the epilogue of a try body) keeps it: the end of the else clause is
         # a jump target, which stops the optimizer from wiping the code after the return.  Written as
@@ -589,7 +595,22 @@ class ControlMixin:
         target = fb.break_target
         if normal_exit is None:
             # no way out except 'break'
-            st.emit(make([]))
+            orelse: list = []
+            if self.graph.dead_code and target is not None:
+                # [dead-code] 'while True: ... else: X': X can never run; it is laid out between
+                # the loop's end and where 'break' goes
+                from decompiler.py39.walker import BLOCK_END_OPS
+                entries = [e for _, e in self.graph.dead_entries
+                           if fb.end_offset < e.offset < target.offset and e not in self._dead_claimed
+                           and e.opname not in BLOCK_END_OPS]
+                if entries:
+                    entry = min(entries, key=lambda n: n.offset)
+                    self._dead_claimed.add(entry)
+                    try:
+                        orelse = self.parse_block(entry, list(st.stack), ctx.evolve(start=entry)).stmts
+                    except DecompileError:
+                        orelse = []
+            st.emit(make(orelse))
             return target if target is not None else TERMINATED
         if target is None or target is normal_exit:
             st.emit(make([]))

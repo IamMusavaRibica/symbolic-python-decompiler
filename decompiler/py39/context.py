@@ -157,7 +157,7 @@ class HandlerCleanupBlock(FBlock):
 
 class Ctx:
     """Where a block lives: its dominance region, where it must stop and what encloses it."""
-    __slots__ = ('start', 'stops', 'base', 'fblocks')
+    __slots__ = ('start', 'stops', 'base', 'fblocks', 'bound')
 
     def __init__(self, start: InstructionNode, stops: FrozenSet[InstructionNode], base: int,
                  fblocks: Tuple[FBlock, ...]):
@@ -165,12 +165,16 @@ class Ctx:
         self.stops = stops  # nodes that end the block when reached
         self.base = base  # stack depth at statement boundaries
         self.fblocks = fblocks  # enclosing frame blocks, outermost first
+        #: [dead-code] offset from which on code belongs to a later construct (an if body's else clause)
+        self.bound: Optional[int] = None
 
-    def evolve(self, start=None, stops=None, base=None, push=None) -> 'Ctx':
-        return Ctx(self.start if start is None else start,
-                   self.stops if stops is None else stops,
-                   self.base if base is None else base,
-                   self.fblocks if push is None else self.fblocks + (push,))
+    def evolve(self, start=None, stops=None, base=None, push=None, bound=None) -> 'Ctx':
+        ctx = Ctx(self.start if start is None else start,
+                  self.stops if stops is None else stops,
+                  self.base if base is None else base,
+                  self.fblocks if push is None else self.fblocks + (push,))
+        ctx.bound = self.bound if bound is None else bound  # [dead-code]
+        return ctx
 
     @property
     def loop(self) -> Optional[LoopBlock]:

@@ -6,9 +6,13 @@ the same instruction graph as the original code object, recursively for every
 nested code object.  Byte-for-byte equality is not required (and not expected,
 see :mod:`decompiler.graph.builder`).
 
-Both code objects go through :mod:`decompiler.graph.peephole` first, so that the
-comparison does not depend on whether the compiler's peephole optimizer ran on them
-(it skips code objects with a source line of more than 255 bytes of bytecode).
+When the graphs differ as they are, both code objects go through
+:mod:`decompiler.graph.peephole` and are compared again, so that the comparison does
+not depend on whether the compiler's peephole optimizer ran on them (it skips code
+objects with a source line of more than 255 bytes of bytecode).  Not the other way
+round: the optimizer is a single pass, and a second pass over already optimized code
+can wipe more (an implicit return whose only jump the first pass removed), which
+would make equal code look different.
 """
 from __future__ import annotations
 
@@ -30,6 +34,8 @@ class GraphComparison(NamedTuple):
 
 
 def compare_code(original: CodeType, recompiled: CodeType, context: int = 4) -> GraphComparison:
+    if dump_code(original) == dump_code(recompiled):
+        return GraphComparison(True, '')
     a = dump_code(optimize_code(original))
     b = dump_code(optimize_code(recompiled))
     if a == b:
@@ -40,4 +46,4 @@ def compare_code(original: CodeType, recompiled: CodeType, context: int = 4) -> 
 
 
 def graphs_equal(original: CodeType, recompiled: CodeType) -> bool:
-    return dump_code(optimize_code(original)) == dump_code(optimize_code(recompiled))
+    return dump_code(original) == dump_code(recompiled)         or dump_code(optimize_code(original)) == dump_code(optimize_code(recompiled))

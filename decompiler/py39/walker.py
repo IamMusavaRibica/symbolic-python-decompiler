@@ -137,7 +137,8 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             # [dead-code] a POP_BLOCK followed (after the clean-up code) by unreachable code is not the
             # normal end of a try body but a jump statement: the normal end is never followed by one
             jump_copy = self.graph.dead_code and not first and st.depth == 0 \
-                and node.opname in ('POP_BLOCK', 'POP_EXCEPT') and self.copy_has_dead_continuation(node, ctx)
+                and node.opname in ('POP_BLOCK', 'POP_EXCEPT') and self.copy_has_dead_continuation(node, ctx)                 and (len(self.analysis.forward_preds(node)) == 1
+                     or all(self.analysis.dominates(ctx.start, p) for p in self.analysis.forward_preds(node)))
             if not jump_copy and self.at_boundary(node, st, first):
                 return Block(st.stmts, node, st.stack)
             if st.depth == 0:
@@ -479,6 +480,8 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             return True
         if not entering and len(st.stack) == ctx.base and self.behind_loop(node, ctx):
             return True  # [dead-code] the code after the loop, reached by 'break'
+        if not entering and ctx.bound is not None and node.offset >= ctx.bound and len(st.stack) == ctx.base:
+            return True  # [dead-code] laid out behind the construct this block belongs to
         if len(st.stack) == ctx.base:
             if node.opname in BLOCK_END_OPS:
                 return True
