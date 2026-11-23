@@ -446,8 +446,10 @@ class ControlMixin:
             # the jumps to the header the optimizer made direct are the body's natural end (a
             # 'return' written after the branches would have wiped that jump)
             return True
-        return any(p.threaded_via == loop.end_offset and self.analysis.dominates(start, p)
-                   for p, _ in loop.header.preds)
+        dominates = self.analysis.dominates
+        return any(dominates(start, p) and (p.threaded_via == loop.end_offset
+                                            or (self.is_taken_edge(p, label) and p.argval == loop.end_offset))
+                   for p, label in loop.header.preds)
 
     def parse_assert(self, test: ast.expr, failing: InstructionNode, passing: InstructionNode, st: State):
         failed = self.parse_block(failing, st.stack, st.ctx.evolve(start=failing))

@@ -705,22 +705,3 @@ def median(data):
         i = n // 2
         return data[i]
 
-# %% stdlib dead-code shapes: return inside an if inside a nested loop whose else branch ends in try/finally
-def f(bpopleft, sentinel, wacquire):
-    try:
-        while 1:
-            obj = bpopleft()
-            if obj is sentinel:
-                debug()
-                return
-            obj = dumps(obj)
-            if wacquire is None:
-                send_bytes(obj)
-            else:
-                wacquire()
-                try:
-                    send_bytes(obj)
-                finally:
-                    wrelease()
-    except IndexError:
-        pass
