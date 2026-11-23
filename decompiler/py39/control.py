@@ -353,7 +353,10 @@ class ControlMixin:
         # a jump target, which stops the optimizer from wiping the code after the return.  Written as
         # 'if a: return 1' + 'return 2' that code is lost.
         ends_function = self.closes_with_dead(second, own=True) is not None
-        if statement and body.terminated and not body.implicit and not ends_function:
+        # [dead-code] likewise when a jump statement in the body left an epilogue that jumps past
+        # the code after the body: that code is an else clause
+        else_clause = statement and self.body_jumps_past(first, second)
+        if statement and body.terminated and not body.implicit and not ends_function and not else_clause:
             # 'if test: ...; return' followed by the rest: no need to nest the rest in an else
             # (not when the body ends by reaching the implicit end of a module or class body)
             st.emit(ast.If(test=test, body=body.stmts or [ast.Pass()], orelse=[]))
@@ -408,7 +411,7 @@ class ControlMixin:
         # [dead-code] (an else branch that ran into the dead epilogue of the enclosing try has ended too)
         dead_else = ends_function and body.terminated and (
             orelse.terminated or (orelse.exit is not None and orelse.exit.dead))
-        if body.terminated and orelse.stmts and not body.implicit and not dead_else:
+        if body.terminated and orelse.stmts and not body.implicit and not dead_else and not else_clause:
             st.emit(ast.If(test=test, body=body.stmts, orelse=[]))
             st.stmts.extend(orelse.stmts)
         elif not body.stmts and orelse.stmts:

@@ -133,13 +133,23 @@ class ExceptionMixin:
         if body.exit is not None:
             if body.exit.opname != 'POP_BLOCK':
                 raise DecompileError('unsupported end of a try body', body.exit)
-            if self.graph.dead_code and not body.exit.dead and not body.exit.threaded and node.jump.opname == 'POP_TOP':
+            if self.graph.dead_code and not body.exit.dead and not body.exit.threaded:
+                # [dead-code] the body does not jump over the handler: what follows its POP_BLOCK is
+                # the body's own 'return <constant>' (written after the statement, the body would
+                # jump to it); a bare except that returns reads the same as a finally that does
+                jump = self.resolve_jump(body.exit, body_ctx)
+                if jump is not None and isinstance(jump[-1], ast.Return):
+                    self.append_jump(body, jump, body_ctx)
+                    body.exit = None
+            if body.exit is None:
+                pass
+            elif self.graph.dead_code and not body.exit.dead and not body.exit.threaded and node.jump.opname == 'POP_TOP':
                 # [dead-code] the body falls into the code behind it instead of jumping over the
                 # handler: that code is the inlined copy of a finally body (one that starts with a
                 # jump statement or return looks like a bare except clause otherwise)
                 raise DecompileError('a try body that does not jump over its handler', body.exit)
-            after_body = body.exit.next
-            if body.exit.dead:
+            after_body = body.exit.next if body.exit is not None else None
+            if body.exit is not None and body.exit.dead:
                 # [dead-code] the body ended in a jump statement; its epilogue leads to the code after
                 # the statement, which is dead too (then it is what follows) or live (then nothing does)
                 self._dead_claimed.add(body.exit)

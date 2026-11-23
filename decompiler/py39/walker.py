@@ -81,7 +81,7 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         size = len(code.co_code)
         last, before = self.graph.node_at(size - 2), self.graph.node_at(size - 4)
         if last is not None and before is not None and last.opname == 'RETURN_VALUE' \
-                and before.opname == 'LOAD_CONST' and before.argval is None and before.next is last:
+                and before.opname == 'LOAD_CONST' and before.argval is None and before.next is last                 and len(last.preds) == 1:  # (not the 'None' of a 'return x or None')
             self.function_end = before
             if before.dead:
                 self.implicit_end = before
@@ -167,6 +167,12 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             if result is TERMINATED:
                 if self.graph.dead_code and not self._dead_no_claim:  # [dead-code]
                     continuation = self.dead_continuation(statement[0], ctx)
+                    while continuation is not None and continuation.dead and continuation.jump is statement[0]                             and continuation.opname in ('JUMP_ABSOLUTE', 'JUMP_FORWARD'):
+                        # a loop's own back jump, dead because the body's last jump was threaded
+                        # past it: what follows it is the code after the loop
+                        continuation = continuation.dead_next
+                        if continuation is not None:
+                            self._dead_claimed.add(continuation)
                     fragment = self.return_fragment(continuation)
                     while fragment is not None:
                         # the rest of a return statement whose finally copy jumped (the value's
@@ -338,13 +344,37 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             entry is self.implicit_end and self.analysis.dominates(first, anchor)
             for anchor, entry in self.graph.dead_entries)
 
+    def body_jumps_past(self, first: InstructionNode, second: InstructionNode) -> bool:
+        """[dead-code] A jump statement inside the code at ``first`` (an if body) left a dead epilogue
+        that leads to live code other than the code at ``second`` (what follows the if body when the
+        statement is read without an else clause): the epilogue jumps past ``second``, so ``second``
+        is an else clause."""
+        if not self.graph.dead_code:
+            return False
+        dominates = self.analysis.dominates
+        skip = BLOCK_END_OPS | {'LOAD_CONST', 'STORE_FAST', 'DELETE_FAST', 'STORE_NAME', 'DELETE_NAME'}
+        for anchor, entry in self.graph.dead_entries:
+            if not dominates(first, anchor) or dominates(second, anchor):
+                continue
+            node = entry
+            for _ in range(10):
+                node = self.follow_dead_jumps(node)
+                if node is None or node is TERMINATED or not node.dead or node.opname not in skip:
+                    break
+                node = node.next
+            if node is not None and node is not TERMINATED and not node.dead and node is not second                     and not dominates(second, node):
+                return True
+        return False
+
     def closes_with_dead(self, first: InstructionNode, own: bool = False):
         """[dead-code] The unreachable region that follows the code starting at ``first`` directly:
         the one hanging off its last (in layout) live instruction, or None.
 
-        With ``own``, only when that instruction is not the RERAISE closing the exception handler
-        of a statement that encloses ``first``: what hangs off that one (the function's implicit
-        return, say) follows the enclosing statement, not the code at ``first``.
+        With ``own``, the region counts as evidence that the code at ``first`` is a clause of its
+        own (an else clause, whose end is a jump target): only what the optimizer would have wiped
+        otherwise qualifies, which is a region right behind a RETURN_VALUE with no jump target in
+        between.  Anything else (behind a raise, behind the RERAISE of an enclosing handler, behind
+        a live jump) exists in either spelling and tells nothing.
         """
         if not self.graph.dead_code:
             return None
@@ -355,13 +385,12 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         last = max(live, key=lambda n: n.offset)
         if last.threaded:
             return None  # the code after it is where its jump went, not what follows it in layout
-        if own and last.opname == 'RERAISE':
-            handlers = [n for n in self.graph.nodes if n.opname in SETUP_OPS and not n.dead
-                        and n.jump is not None and dominates(n.jump, last)]
-            if handlers and not dominates(first, max(handlers, key=lambda n: n.jump.offset)):
-                return None
+        if own and last.opname != 'RETURN_VALUE':
+            return None
         for anchor, entry in self.graph.dead_entries:
             if anchor is last:
+                if own and entry in self.graph.dead_gapped:
+                    return None
                 return entry
         return None
 
@@ -425,8 +454,9 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         loop = ctx.loop
         if not self.graph.dead_code or loop is None or node.dead or node in loop.nodes or node.is_pseudo:
             return False
-        # (reached through unconditional jumps only: fall-through edges that were threaded)
-        return node.offset > loop.end_offset and bool(node.preds)             and all(p.threaded and not self.is_taken_edge(p, label) for p, label in node.preds)
+        # (reached by jumps only, never by falling through: a threaded fall-through, or a branch's
+        # taken edge, which the optimizer may have threaded through the 'break' jump itself)
+        return node.offset > loop.end_offset and bool(node.preds)             and all(p.threaded or self.is_taken_edge(p, label) for p, label in node.preds)
 
     def owned(self, node: InstructionNode, owners) -> bool:
         return all(p in owners for p in self.analysis.forward_preds(node))
@@ -437,6 +467,11 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             return True
         if node is self.implicit_end and ctx.start is not self.graph.entry:
             return True  # [dead-code] the function's own end: not part of a nested block
+        if self.graph.dead_code and node is self.function_end and ctx.start is not self.graph.entry                 and len(st.stack) == ctx.base and self.kind not in ('lambda', 'comprehension'):
+            # [dead-code] the live implicit return is never a statement of a nested block either: a
+            # block that alone reaches it ('if a: x else: raise') falls out to the function's end
+            # (written 'return', an explicit one would leave the implicit return dead)
+            return True
         if not self.analysis.dominates(ctx.start, node):
             return True
         if len(st.stack) == ctx.base:
@@ -556,6 +591,11 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
                 as_return = self._resolve(after, index - 1, ctx, True)
                 if as_return is not None:
                     return as_return
+            if self.graph.dead_code and fb.header.offset < after.offset < fb.end_offset:
+                # [dead-code] laid out inside the loop: a statement of the body that never comes
+                # back (a raise), not where 'break' goes (written 'break' + the statement after the
+                # loop, the loop's end would leave a dead implicit return behind)
+                return None
             if after not in fb.nodes:
                 fb.break_target = after
                 return [ast.Break()]

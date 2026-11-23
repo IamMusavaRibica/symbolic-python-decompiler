@@ -50,6 +50,8 @@ class CodeGraph:
         self.dead_code: bool = options.dead_code if dead_code is None else dead_code
         #: [dead-code] (anchor, entry): the live instruction after which the dead region at entry follows
         self.dead_entries: List[Tuple[InstructionNode, InstructionNode]] = []
+        #: [dead-code] entries that do not physically follow their anchor (a live jump sits between)
+        self.dead_gapped = set()
         self._dead_phase = False
         self.nx = networkx.MultiDiGraph()
         self.entry = InstructionNode(OP_ENTRY, None, None, -1)
@@ -192,9 +194,11 @@ class CodeGraph:
                     break
                 for anchor in sorted(anchors, key=lambda n: n.offset):
                     examined.add(anchor)
+                    gapped = False
                     if anchor.opname in TERMINATORS or anchor.opname in UNCONDITIONAL_JUMPS:
                         after = following.get(anchor.offset)
                         while after in live_jumps:
+                            gapped = True
                             # a live jump that a branch was threaded through: what follows it is
                             # the terminator's unreachable successor just the same
                             after = following.get(after)
@@ -221,10 +225,22 @@ class CodeGraph:
                     while probe is not None and by_offset[probe].opname in UNCONDITIONAL_JUMPS | TRANSPARENT:
                         probe = following.get(probe)
                     if probe is None or probe in self._by_offset:
+                        # (a dropped back jump still says where the loop body ends: layout hint)
+                        j = target
+                        while j is not None and j != probe:
+                            ins = by_offset[j]
+                            if ins.opname in UNCONDITIONAL_JUMPS:
+                                dest, _ = resolve(ins.argval, True)
+                                dst = None if dest is None or isinstance(dest, tuple) else self._by_offset.get(dest)
+                                if dst is not None and dst.offset <= j:
+                                    dst.back_jumps.append(j)
+                            j = following.get(j)
                         continue
                     entry = node_for(target)
                     self._add_edge(anchor, entry, DEAD)
                     self.dead_entries.append((anchor, entry))
+                    if gapped:
+                        self.dead_gapped.add(entry)
                     drain()
         self._undo_jump_simplification()
 
