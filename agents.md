@@ -25,8 +25,8 @@ The readme is the user-facing overview; this file is the engineering knowledge.
   `python tools/corpus_check.py [-n] [--dead-code] -j 8` (stdlib by default; pass paths for other corpora),
   `python tools/build_graph.py FILE [-k NAME] [-c] [--dead-code]` (renders one .svg per code object).
 - State at the time of writing: default mode round-trips 100% of the stdlib (19 873 code objects) with both
-  compilers, the CPython test suite (43 183) and eight large packages (108 182); the test suite is 418/418
-  with both compilers in both modes; dead-code mode round-trips 19 797 of 19 873 stdlib objects.
+  compilers, the CPython test suite (43 183) and eight large packages (108 182); the test suite is 440/440
+  with both compilers in both modes; dead-code mode round-trips 19 864 of 19 873 stdlib objects.
 - Git: commit with `git -c commit.gpgsign=false commit ...` (signing is configured and would prompt for a
   passphrase). No `Co-Authored-By` or other attribution trailers in commit messages.
 
@@ -191,11 +191,27 @@ found, fixed or removed as one piece; with the switch off the decompiler behaves
 
 ### Known remaining dead-mode failures (stdlib)
 
-71 "graphs differ" and 5 "cannot tell where control goes" out of 19 873. Not analysed yet. Approach that
-worked for every case so far: dump with `--graph -o` (offsets), map each dead region to the construct and
+9 out of 19 873 (asynchat initiate_send, tarfile TarFile.next, asyncio/__main__, asyncio
+serve_forever and _accept_connection, concurrent.futures add_call_item_to_queue, idlelib rpc localcall
+and pollresponse, importlib _bootstrap_external._setup), plus one reduced shape kept out of the suite
+because it fails without the peephole only: a return inside an if inside a nested loop whose else
+branch ends in try/finally (`if obj is sentinel: ...; return` / `obj = dumps(obj); if w is None: ... else:
+...; try/finally` inside `while 1` inside `try`). Approach that worked for every case so far: dump with `--graph -o` (offsets), map each dead region to the construct and
 copy that emitted it (the compiler emits a finally body up to three times: return path, normal path,
 exception path; `continue`/`break` inside copies unwind different block sets), then find which claim or
 spelling rule misreads it. Reduce to a minimal shape first; add it to `tests/cases/torture.py`.
+
+### A direction worth taking: post-dominators
+
+Several dead-mode rules reason about layout (`end_offset`, `behind_loop`, `bound`, "the last jump
+before the dead end jump") to answer one question: *does this node belong to the construct being
+parsed, or to what follows it?*  `analysis.py` has dominators; it does not have post-dominators
+(reverse dominators).  With them, "the code after the loop" is the immediate post-dominator of the
+loop's exits, "the join of an if" is the immediate post-dominator of its branches, and "a jump
+statement" is an edge that leaves a construct without passing through that post-dominator.  Most
+of the layout rules are approximations of those three facts, and layout breaks exactly where the
+stock optimizer erased a jump.  Rebuilding the claiming layer on post-dominators (computed on the
+live graph, dead regions attached afterwards) is the cleanest way to retire the heuristics.
 
 ## Debugging tips
 
