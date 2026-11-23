@@ -362,7 +362,7 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
                 if node is None or node is TERMINATED or not node.dead or node.opname not in skip:
                     break
                 node = node.next
-            if node is not None and node is not TERMINATED and not node.dead and node is not second                     and not dominates(second, node):
+            if node is not None and node is not TERMINATED and not node.dead and node is not second                     and not dominates(second, node) and not dominates(first, node):
                 return True
         return False
 
@@ -456,7 +456,10 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             return False
         # (reached by jumps only, never by falling through: a threaded fall-through, or a branch's
         # taken edge, which the optimizer may have threaded through the 'break' jump itself)
-        return node.offset > loop.end_offset and bool(node.preds)             and all(p.threaded or self.is_taken_edge(p, label) for p, label in node.preds)
+        # (a for loop's body ends where FOR_ITER leaves to; a while loop's where its last back jump
+        # is, which the optimizer wipes behind a return, making the last statement look outside)
+        end = loop.header.jump.offset if loop.is_for and loop.header.jump is not None else loop.end_offset
+        return node.offset >= end and node.offset > loop.end_offset and bool(node.preds)             and all(p.threaded or self.is_taken_edge(p, label) for p, label in node.preds)
 
     def owned(self, node: InstructionNode, owners) -> bool:
         return all(p in owners for p in self.analysis.forward_preds(node))
@@ -474,6 +477,8 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             return True
         if not self.analysis.dominates(ctx.start, node):
             return True
+        if not entering and len(st.stack) == ctx.base and self.behind_loop(node, ctx):
+            return True  # [dead-code] the code after the loop, reached by 'break'
         if len(st.stack) == ctx.base:
             if node.opname in BLOCK_END_OPS:
                 return True
