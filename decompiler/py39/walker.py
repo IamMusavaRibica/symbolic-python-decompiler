@@ -475,7 +475,12 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         # taken edge, which the optimizer may have threaded through the 'break' jump itself)
         # (a for loop's body ends where FOR_ITER leaves to; a while loop's where its last back jump
         # is, which the optimizer wipes behind a return, making the last statement look outside)
-        end = loop.header.argval if loop.is_for and isinstance(loop.header.argval, int) else loop.end_offset
+        if loop.is_for and isinstance(loop.header.argval, int):
+            end = loop.header.argval
+        elif loop.exit_offset is not None:
+            end = loop.exit_offset
+        else:
+            end = loop.end_offset
         return node.offset >= end and node.offset > loop.end_offset and bool(node.preds)             and all(p.threaded or self.is_taken_edge(p, label) for p, label in node.preds)
 
     def owned(self, node: InstructionNode, owners) -> bool:
@@ -647,6 +652,11 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         if block.exit is None or block.exit in accept:
             return
         jump = self.resolve_jump(block.exit, ctx)
+        if jump is None and self.graph.dead_code and block.exit is self.implicit_end:
+            # [dead-code] dead flow that ran into the function's implicit return: the block ended
+            self._dead_claimed.add(block.exit)
+            block.exit = None
+            return
         if jump is None:
             self.check_missing_loop(block.exit, ctx)
             raise DecompileError('cannot tell where control goes from here', block.exit)

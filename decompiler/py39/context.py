@@ -53,6 +53,8 @@ class LoopBlock(FBlock):
         #: layout hint for 'while True': the node outside the loop that was placed last in the bytecode,
         #: if it lies behind the loop.  Code after the loop is laid out after everything in the loop.
         self.layout_exit: Optional[InstructionNode] = None
+        #: [dead-code] offset of the code the loop's test leaves to (a while loop): the body ends before it
+        self.exit_offset: Optional[int] = None
         #: layout hint: offset of the last jump back to the header
         self.end_offset = max(header.back_jumps, default=header.offset)
 

@@ -70,7 +70,7 @@ class Decompiler:
         from decompiler.postprocess import finalize
         kind = 'module' if self.code.co_name == '<module>' else 'function'
         body = _run_deep(lambda: self.body_of(self.code, kind))
-        self.tree = _run_deep(lambda: ast.fix_missing_locations(finalize(ast.Module(body=body, type_ignores=[]))))
+        self.tree = _run_deep(lambda: ast.fix_missing_locations(finalize(ast.Module(body=body, type_ignores=[]), self.dead_code)))
         return self.tree
 
     def get_source_code(self) -> str:

@@ -504,6 +504,8 @@ class ControlMixin:
             # [dead-code] the way out is laid out inside the loop: 'while True:' + 'if c: return',
             # not 'while not c:' (which leaves the implicit return after the loop alive)
             test, start, normal_exit = ast.Constant(value=True), header, None
+        if normal_exit is not None and not normal_exit.is_pseudo:
+            fb.exit_offset = normal_exit.offset  # [dead-code]
         self.find_break_target(fb, normal_exit, cond.nodes if normal_exit is not None else ())
         if not guess_target:
             fb.break_target = None

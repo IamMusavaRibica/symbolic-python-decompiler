@@ -22,7 +22,12 @@ from decompiler.py39.values import ConstSet, FStringPart, Pseudo, const_to_ast
 LOOPS = (ast.For, ast.AsyncFor, ast.While)
 
 
-def finalize(tree: ast.AST) -> ast.AST:
+_KEEP_CONTINUE = False  # [dead-code] set by finalize: a trailing 'continue' is kept (it decides what is dead)
+
+
+def finalize(tree: ast.AST, dead_code: bool = False) -> ast.AST:
+    global _KEEP_CONTINUE
+    _KEEP_CONTINUE = dead_code  # [dead-code]
     return _walk(tree)
 
 
@@ -83,7 +88,7 @@ def _fix(node: ast.AST) -> ast.AST:
 
 def _strip_continue(body: List[ast.stmt]) -> List[ast.stmt]:
     """Drop a ``continue`` that is the last thing a loop body does anyway."""
-    if not body:
+    if not body or _KEEP_CONTINUE:
         return body
     last = body[-1]
     if isinstance(last, ast.Continue):

@@ -84,6 +84,12 @@ class ExceptionMixin:
         exc_stack = exception_entry(stack)
         end_ctx = ctx.evolve(start=entry, base=len(exc_stack), push=FinallyEndBlock())
         final = self.parse_block(entry, exc_stack, end_ctx)
+        from decompiler.py39.walker import BLOCK_END_OPS  # [dead-code] (walker imports this module)
+        if self.graph.dead_code and final.exit is not None and final.exit.dead and final.exit.opname in BLOCK_END_OPS:
+            # [dead-code] the finally body ended in a jump statement; what it stopped at is the
+            # epilogue of the handler it sits in (a bare 'raise' inside a handler's finally)
+            self._dead_claimed.add(final.exit)
+            final.exit = None
         if final.exit is not None and final.exit.opname != 'RERAISE':
             self.close_block(final, end_ctx)
         fb = FinallyTryBlock(entry, final.exit)
@@ -173,14 +179,18 @@ class ExceptionMixin:
 
         orelse: List[ast.stmt] = []
         fell_through = None
-        if self.graph.dead_code and len(continuations) == 1 and continuations[0] is not after_body:
+        if self.graph.dead_code and continuations and after_body not in continuations:
             # [dead-code] A handler that jumped has no continuation here (its dead epilogue told),
             # except for 'return <constant>', which leaves none behind.  So a handler whose
             # continuation is the loop's own jump fell through: the statement ends there, and
             # what follows the body (if anything) is an else clause.
-            jump = self.resolve_jump(continuations[0], ctx, len(continuations[0].preds) == 1)
-            if (jump is None or not isinstance(jump[0], ast.Return))                     and not self.handler_jumped(continuations[0], ctx):
-                fell_through = continuations[0]
+            others = []
+            for c in continuations:
+                jump = self.resolve_jump(c, ctx, len(c.preds) == 1)
+                if jump is None or not isinstance(jump[0], ast.Return):
+                    others.append(c)
+            if len(others) == 1 and not self.handler_jumped(others[0], ctx):
+                fell_through = others[0]
         if fell_through is not None:
             join = fell_through
             if after_body is not None:
