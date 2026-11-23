@@ -145,6 +145,7 @@ class CodeGraph:
                 threaded[origin] = jumps[0]  # [dead-code]
                 src.threaded = True
                 src.threaded_via = jumps[0]  # [dead-code]
+                src.threaded_op = by_offset[jumps[0]].opname  # [dead-code]
             if not self._dead_phase:
                 live_jumps.update(jumps)  # [dead-code]
             dst = node_for(target)

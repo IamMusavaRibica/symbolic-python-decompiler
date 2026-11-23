@@ -165,6 +165,9 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
                 except DecompileError:
                     raise missing  # an enclosing statement may be the one to wrap
             first = False
+            if result is None and self.graph.dead_code and st.depth == 0 and node.threaded                     and ctx.loop is not None and node.next is ctx.loop.header and self.explicit_continue(node, ctx.loop):
+                st.emit(ast.Continue())  # [dead-code]
+                result = TERMINATED
             if result is TERMINATED:
                 if self.graph.dead_code and not self._dead_no_claim:  # [dead-code]
                     continuation = self.dead_continuation(statement[0], ctx)
@@ -447,6 +450,19 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         if start in ctx.stops or not self.owned(start, owners) or self.behind_loop(start, ctx):
             return Block([], start, list(stack))
         return self.parse_block(start, stack, ctx.evolve(start=start))
+
+    def explicit_continue(self, node: InstructionNode, loop) -> bool:
+        """[dead-code] ``node`` flows to the loop header through a jump of its own: the 'continue'
+        that ends the loop body.  Told by the loop's end jump being there but dead (nothing falls
+        into it), with ``node``'s jump the last one before it; written as the natural end of the
+        body, the end jump would be reached.  (The optimizer turns the jump over an else clause
+        into a jump to the header too, so the opcode tells nothing; its position does.)"""
+        end = self.graph.node_at(loop.end_offset)
+        if end is None or not end.dead or end.jump is not loop.header or node.threaded_via == loop.end_offset:
+            return False
+        last = max((p.threaded_via for p, _ in loop.header.preds if p.threaded and p.threaded_via < loop.end_offset),
+                   default=None)
+        return node.threaded_via == last
 
     def behind_loop(self, node: InstructionNode, ctx: Ctx) -> bool:
         """[dead-code] ``node`` is live code laid out behind the innermost loop that only jumps lead

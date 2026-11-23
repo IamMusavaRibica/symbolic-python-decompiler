@@ -440,6 +440,12 @@ class ControlMixin:
             # (the optimizer threads a jump to the loop's end jump into one to the header, and
             # erases the end jump behind a return: a jump straight to the header reads the same)
             return last.argval in (loop.end_offset, loop.header.offset)
+        end_jump = self.graph.node_at(loop.end_offset)
+        if end_jump is not None and end_jump.dead and end_jump.jump is loop.header:
+            # the loop's end jump is there but unreachable: nothing falls into the loop's end, so
+            # the jumps to the header the optimizer made direct are the body's natural end (a
+            # 'return' written after the branches would have wiped that jump)
+            return True
         return any(p.threaded_via == loop.end_offset and self.analysis.dominates(start, p)
                    for p, _ in loop.header.preds)
 
@@ -492,6 +498,10 @@ class ControlMixin:
             elif inside_false and not inside_true and negatable(cond.test) \
                     and cond.true.opname != 'LOAD_ASSERTION_ERROR':
                 test, start, normal_exit = negate(cond.test), cond.false, cond.true
+        if self.graph.dead_code and normal_exit is not None and not normal_exit.is_pseudo                 and header.offset < normal_exit.offset < fb.end_offset:
+            # [dead-code] the way out is laid out inside the loop: 'while True:' + 'if c: return',
+            # not 'while not c:' (which leaves the implicit return after the loop alive)
+            test, start, normal_exit = ast.Constant(value=True), header, None
         self.find_break_target(fb, normal_exit, cond.nodes if normal_exit is not None else ())
         if not guess_target:
             fb.break_target = None

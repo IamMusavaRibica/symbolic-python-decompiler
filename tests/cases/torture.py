@@ -573,3 +573,154 @@ def gen(xs):
         yield 1
     finally:
         return
+
+# %% stdlib dead-code shapes: if/else whose else raises (the implicit return is reached by the body alone)
+def set_subdir(self, subdir):
+    if subdir == 'new':
+        self._subdir = subdir
+    else:
+        raise ValueError(subdir)
+
+# %% stdlib dead-code shapes: raise inside a loop laid out before the loop end is no break target
+def unwrap(func, memo):
+    while w(func):
+        func = func.w
+        if func in memo or len(memo) >= 3:
+            raise ValueError(func)
+        memo[func] = func
+    return func
+
+# %% stdlib dead-code shapes: return False / return True in while True inside with
+def f(fp1, fp2):
+    with a as fp:
+        while True:
+            b1 = fp1.read()
+            b2 = fp2.read()
+            if b1 != b2:
+                return False
+            if not b1:
+                return True
+
+# %% stdlib dead-code shapes: two try statements in while True, handler returns (dead back jump)
+def f(pop, d):
+    while True:
+        try:
+            key = pop()
+        except IndexError:
+            return
+        try:
+            del d[key]
+        except KeyError:
+            pass
+
+# %% stdlib dead-code shapes: continue after a handler that continues
+def f(node):
+    for name in node:
+        try:
+            value = g(name)
+        except AttributeError:
+            keywords = True
+            continue
+        if value is None:
+            keywords = True
+            continue
+        h(value)
+
+# %% stdlib dead-code shapes: break whose target is reached by a conditional jump the optimizer threaded
+def f(self):
+    result = ''
+    while True:
+        c = self.next
+        if c is None:
+            if not result:
+                raise E
+            raise F
+        if c == t:
+            if not result:
+                raise G
+            break
+        result += c
+    return result
+
+# %% stdlib dead-code shapes: return True as the last statement of a try/finally body
+def wait(self):
+    if self._value:
+        return True
+    fut = self._loop.create_future()
+    try:
+        f(fut)
+        return True
+    finally:
+        self._waiters.remove(fut)
+
+# %% stdlib dead-code shapes: if then break inside try inside for (shared clean-up chain)
+def f(ress):
+    for res in ress:
+        err = sock = None
+        try:
+            sock = g(res)
+            if sock == 1:
+                sock.connect()
+            break
+        except OSError as exc:
+            err = exc
+            if sock is not None:
+                sock.close()
+    if err is not None:
+        raise err
+
+# %% stdlib dead-code shapes: if/else raise followed by a return reached by the body alone
+def seek(self, pos=0):
+    if pos - self.pos >= 0:
+        for i in range(3):
+            self.read(self.bufsize)
+        self.read(pos)
+    else:
+        raise StreamError('x')
+    return self.pos
+
+# %% stdlib dead-code shapes: while 1 with an unreachable else clause
+def PipeClient(address):
+    t = _init_timeout()
+    while 1:
+        try:
+            h = f(address)
+        except OSError as e:
+            if e.winerror not in (1, 2) or _check_timeout(t):
+                raise
+        else:
+            break
+    else:
+        raise
+    return PipeConnection(h)
+
+# %% stdlib dead-code shapes: raise followed by if/else returns (no elif)
+def median(data):
+    n = len(data)
+    if n == 0:
+        raise E
+    if n % 2 == 1:
+        return data[1]
+    else:
+        i = n // 2
+        return data[i]
+
+# %% stdlib dead-code shapes: return inside an if inside a nested loop whose else branch ends in try/finally
+def f(bpopleft, sentinel, wacquire):
+    try:
+        while 1:
+            obj = bpopleft()
+            if obj is sentinel:
+                debug()
+                return
+            obj = dumps(obj)
+            if wacquire is None:
+                send_bytes(obj)
+            else:
+                wacquire()
+                try:
+                    send_bytes(obj)
+                finally:
+                    wrelease()
+    except IndexError:
+        pass
