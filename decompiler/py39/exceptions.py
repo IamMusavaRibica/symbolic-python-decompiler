@@ -71,7 +71,8 @@ class ExceptionMixin:
             stack, count = list(st.stack), len(st.stmts)
             try:
                 return self.parse_try_except(node, st)
-            except DecompileError:
+            except DecompileError as e:
+                logger.debug('try at {}: not a bare except ({}); read as try/finally', node, e)
                 st.stack[:] = stack
                 del st.stmts[count:]
         return self.parse_try_finally(node, st)
@@ -229,13 +230,16 @@ class ExceptionMixin:
                     orelse = block.stmts
             else:
                 join = after_body
-                dead_join = self.dead_try_join(node, handlers, after_body, ctx)                     if after_body is not None and self.owned(after_body, {body.exit}) else None
+                dead_join = self.dead_try_join(node, handlers, after_body, ctx) if after_body is not None else None
                 if dead_join is not None and dead_join is not after_body:
-                    join = dead_join
-                    orelse_ctx = ctx.evolve(stops=ctx.stops | {join})
+                    orelse_ctx = ctx.evolve(stops=ctx.stops | {dead_join})
                     block = self.parse_branch(after_body, {body.exit}, stack, orelse_ctx)
-                    self.close_block(block, orelse_ctx, accept=(join,))
-                    orelse = block.stmts
+                    if block.stmts or block.exit is None or block.exit is dead_join                             or self.resolve_jump(block.exit, orelse_ctx, len(block.exit.preds) == 1) is not None:
+                        join = dead_join
+                        self.close_block(block, orelse_ctx, accept=(join,))
+                        orelse = block.stmts
+                    # (else: the code after the body is a join other code reaches too, and no jump
+                    # statement: the statement ends there after all)
         logger.debug('try at {}: after_body {}, continuations {}, dead_after {}, fell_through {}, join {}', node, after_body, continuations, [h.dead_after for h in handlers], fell_through, join)
         for handler in handlers:
             if handler.after is not None and handler.after is not join:

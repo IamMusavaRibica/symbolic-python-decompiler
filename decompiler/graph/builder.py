@@ -137,12 +137,14 @@ class CodeGraph:
 
         threaded: Dict[int, int] = {}  # [dead-code] node offset -> first jump its fall-through went through
         live_jumps = set()  # [dead-code] offsets of the jumps live code goes through
+        chains = {}  # [dead-code] origin offset -> the whole chain of jumps its fall-through went through
 
         def connect(src: InstructionNode, raw_offset: Optional[int], label: str, origin: int):
             # [dead-code] in dead regions jumps are kept as nodes: a dead 'break' / 'continue' is one
             target, jumps = resolve(raw_offset, not self._dead_phase)
             if jumps and origin >= 0 and raw_offset == following.get(origin):
                 threaded[origin] = jumps[0]  # [dead-code]
+                chains[origin] = jumps  # [dead-code]
                 src.threaded = True
                 src.threaded_via = jumps[0]  # [dead-code]
                 src.threaded_op = by_offset[jumps[0]].opname  # [dead-code]
@@ -183,6 +185,48 @@ class CodeGraph:
 
         connect(self.entry, offsets[0], NEXT, -1)
         drain()
+
+        def record_back_jumps(offset):
+            """[dead-code] Layout hint: the back jumps among the jumps that start at ``offset``."""
+            while offset is not None and offset not in self._by_offset                     and by_offset[offset].opname in UNCONDITIONAL_JUMPS | TRANSPARENT:
+                ins = by_offset[offset]
+                if ins.opname in UNCONDITIONAL_JUMPS:
+                    dest, _ = resolve(ins.argval, True)
+                    dst = None if dest is None or isinstance(dest, tuple) else self._by_offset.get(dest)
+                    if dst is not None and dst.offset <= offset and offset not in dst.back_jumps:
+                        dst.back_jumps.append(offset)
+                offset = following.get(offset)
+
+        def seed(anchor, after, gapped):
+            """[dead-code] Make the instruction at ``after`` a dead region hanging off ``anchor``."""
+            target, _ = resolve(after, False)
+            if target is None or isinstance(target, tuple):
+                return
+            existing = self._by_offset.get(target)
+            if existing is not None:
+                if existing.dead and not anchor.dead and existing.opname not in UNCONDITIONAL_JUMPS:
+                    # a dead region reached from a second (live) terminator as well; a dead
+                    # anchor's physical successor inside a region is the region's own business
+                    # (and a jump never starts statements: see the probe below)
+                    self._add_edge(anchor, existing, DEAD)
+                    self.dead_entries.append((anchor, existing))
+                return
+            # A region of nothing but jumps (a loop's back jump after a 'break', the jump
+            # over an exception handler after a 'return') is left out: which of two
+            # spellings with the same graph was written decides whether it exists.
+            probe = target
+            while probe is not None and by_offset[probe].opname in UNCONDITIONAL_JUMPS | TRANSPARENT:
+                probe = following.get(probe)
+            if probe is None or probe in self._by_offset:
+                record_back_jumps(target)  # (a dropped back jump still says where the loop body ends)
+                return
+            entry = node_for(target)
+            self._add_edge(anchor, entry, DEAD)
+            self.dead_entries.append((anchor, entry))
+            if gapped:
+                self.dead_gapped.add(entry)
+            drain()
+
         if self.dead_code:
             # [dead-code] Unreachable instructions: whatever physically follows a terminator or an
             # unconditional jump and is not reached otherwise.  Dead regions are built like live
@@ -195,54 +239,22 @@ class CodeGraph:
                     break
                 for anchor in sorted(anchors, key=lambda n: n.offset):
                     examined.add(anchor)
-                    gapped = False
                     if anchor.opname in TERMINATORS or anchor.opname in UNCONDITIONAL_JUMPS:
+                        gapped = False
                         after = following.get(anchor.offset)
                         while after in live_jumps:
                             gapped = True
                             # a live jump that a branch was threaded through: what follows it is
                             # the terminator's unreachable successor just the same
                             after = following.get(after)
+                        seed(anchor, after, gapped)
                     elif anchor.offset in threaded:
-                        after = following.get(threaded[anchor.offset])
-                    else:
-                        continue
-                    target, _ = resolve(after, False)
-                    if target is None or isinstance(target, tuple):
-                        continue
-                    existing = self._by_offset.get(target)
-                    if existing is not None:
-                        if existing.dead and not anchor.dead and existing.opname not in UNCONDITIONAL_JUMPS:
-                            # a dead region reached from a second (live) terminator as well; a dead
-                            # anchor's physical successor inside a region is the region's own business
-                            # (and a jump never starts statements: see the probe below)
-                            self._add_edge(anchor, existing, DEAD)
-                            self.dead_entries.append((anchor, existing))
-                        continue
-                    # A region of nothing but jumps (a loop's back jump after a 'break', the jump
-                    # over an exception handler after a 'return') is left out: which of two
-                    # spellings with the same graph was written decides whether it exists.
-                    probe = target
-                    while probe is not None and by_offset[probe].opname in UNCONDITIONAL_JUMPS | TRANSPARENT:
-                        probe = following.get(probe)
-                    if probe is None or probe in self._by_offset:
-                        # (a dropped back jump still says where the loop body ends: layout hint)
-                        j = target
-                        while j is not None and j != probe:
-                            ins = by_offset[j]
-                            if ins.opname in UNCONDITIONAL_JUMPS:
-                                dest, _ = resolve(ins.argval, True)
-                                dst = None if dest is None or isinstance(dest, tuple) else self._by_offset.get(dest)
-                                if dst is not None and dst.offset <= j:
-                                    dst.back_jumps.append(j)
-                            j = following.get(j)
-                        continue
-                    entry = node_for(target)
-                    self._add_edge(anchor, entry, DEAD)
-                    self.dead_entries.append((anchor, entry))
-                    if gapped:
-                        self.dead_gapped.add(entry)
-                    drain()
+                        seed(anchor, following.get(threaded[anchor.offset]), False)
+                        # what follows the chain's later jumps is not this anchor's (the loop's end
+                        # jump behind a 'break' belongs to the loop), but a back jump there still
+                        # says where the loop body ends
+                        for j in chains[anchor.offset][1:]:
+                            record_back_jumps(following.get(j))
         self._undo_jump_simplification()
 
     def _remove_edges(self, node: InstructionNode):

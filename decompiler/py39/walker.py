@@ -448,6 +448,8 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         the branch: the branch is empty and ``start`` is its exit.
         """
         if start in ctx.stops or not self.owned(start, owners) or self.behind_loop(start, ctx):
+            logger.debug('branch at {} is empty: stop {}, owned {}, behind loop {}', start, start in ctx.stops,
+                         self.owned(start, owners), self.behind_loop(start, ctx))
             return Block([], start, list(stack))
         return self.parse_block(start, stack, ctx.evolve(start=start))
 

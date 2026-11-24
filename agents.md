@@ -25,8 +25,8 @@ The readme is the user-facing overview; this file is the engineering knowledge.
   `python tools/corpus_check.py [-n] [--dead-code] -j 8` (stdlib by default; pass paths for other corpora),
   `python tools/build_graph.py FILE [-k NAME] [-c] [--dead-code]` (renders one .svg per code object).
 - State at the time of writing: default mode round-trips 100% of the stdlib (19 873 code objects) with both
-  compilers, the CPython test suite (43 183) and eight large packages (108 182); the test suite is 440/440
-  with both compilers in both modes; dead-code mode round-trips 19 864 of 19 873 stdlib objects.
+  compilers, the CPython test suite (43 183) and eight large packages (108 182); the test suite is 454/454
+  with both compilers in both modes; dead-code mode round-trips the whole stdlib as well.
 - Git: commit with `git -c commit.gpgsign=false commit ...` (signing is configured and would prompt for a
   passphrase). No `Co-Authored-By` or other attribution trailers in commit messages.
 
@@ -189,16 +189,21 @@ found, fixed or removed as one piece; with the switch off the decompiler behaves
 - Code running off the end of the code object (no implicit return after a block that returned) ends like
   a module body.
 
-### Known remaining dead-mode failures (stdlib)
+### Remaining dead-mode failures
 
-9 out of 19 873 (asynchat initiate_send, tarfile TarFile.next, asyncio/__main__, asyncio
-serve_forever and _accept_connection, concurrent.futures add_call_item_to_queue, idlelib rpc localcall
-and pollresponse, importlib _bootstrap_external._setup), plus one reduced shape kept out of the suite
-because it fails without the peephole only: a return inside an if inside a nested loop whose else
-branch ends in try/finally (`if obj is sentinel: ...; return` / `obj = dumps(obj); if w is None: ... else:
-...; try/finally` inside `while 1` inside `try`). Approach that worked for every case so far: dump with `--graph -o` (offsets), map each dead region to the construct and
-copy that emitted it (the compiler emits a finally body up to three times: return path, normal path,
-exception path; `continue`/`break` inside copies unwind different block sets), then find which claim or
+None in the stdlib with the stock compiler. With the peephole-less compiler, dead-code mode fails on
+8 of 19 873 stdlib objects (see `tools/corpus_check.py --dead-code -n`) and on three reduced shapes
+kept out of the suite for that reason: `if / elif / else` whose first and last branches `continue`;
+`while True` with `if c: return` followed by try/except/else ending in `continue`; a `return` inside an
+`if` inside a nested loop whose else branch ends in try/finally. All three are about which jump to the
+loop header is an explicit `continue` when no jump was threaded (`explicit_continue`,
+`through_loop_end`), which the stock rules decide from the erased or dead end jump.
+
+Approach that worked for every case: dump with `--graph -o` (offsets), map each dead region to the
+construct and copy that emitted it (the compiler emits a finally body up to three times: return path,
+normal path, exception path; `continue` / `break` inside copies unwind different block sets; the stock
+optimizer wipes code after a RETURN_VALUE up to the next jump target, SETUP_FINALLY or RERAISE,
+threads jumps to jumps and turns a threaded JUMP_FORWARD into JUMP_ABSOLUTE), then find which claim or
 spelling rule misreads it. Reduce to a minimal shape first; add it to `tests/cases/torture.py`.
 
 ### A direction worth taking: post-dominators

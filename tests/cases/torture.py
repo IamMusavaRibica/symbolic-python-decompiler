@@ -705,3 +705,163 @@ def median(data):
         i = n // 2
         return data[i]
 
+
+# %% stdlib dead-code shapes: handler that falls through next to a handler that returns, with an else clause
+def f(self, sock):
+    for _ in range(3):
+        try:
+            conn = sock.accept()
+        except BlockingIOError:
+            return None
+        except OSError as exc:
+            if exc.errno in (1, 2):
+                self.call_later(exc)
+            else:
+                raise
+        else:
+            extra = conn
+            self.create_task(extra)
+
+# %% stdlib dead-code shapes: handler with an if then continue, else break
+def f(loop):
+    while True:
+        try:
+            loop.run_forever()
+        except KeyboardInterrupt:
+            if g():
+                h()
+            continue
+        else:
+            break
+
+# %% stdlib dead-code shapes: return through a finally that holds a try/finally
+def run(main, loop):
+    try:
+        set_loop(loop)
+        return loop.run(main)
+    finally:
+        try:
+            cancel(loop)
+        finally:
+            loop.close()
+
+# %% stdlib dead-code shapes: module level while True whose else breaks to the end of the module
+import sys
+if __name__ == '__main__':
+    loop = new_loop()
+    while True:
+        try:
+            loop.run_forever()
+        except KeyboardInterrupt:
+            if repl_future and not repl_future.done():
+                repl_future.cancel()
+            continue
+        else:
+            break
+
+# %% stdlib dead-code shapes: if then break, else try then break with a handler that continues, in a for with else
+def _setup(sys, details):
+    for builtin_os, seps in details:
+        path_sep = seps[0]
+        if builtin_os in sys.modules:
+            os_module = sys.modules[builtin_os]
+            break
+        else:
+            try:
+                os_module = name(builtin_os)
+                break
+            except ImportError:
+                continue
+    else:
+        raise ImportError('x')
+    setattr(sys, '_os', os_module)
+
+# %% stdlib dead-code shapes: three handlers in a while True whose body breaks (tarfile.next)
+def next(self):
+    tarinfo = None
+    while True:
+        try:
+            tarinfo = self.tarinfo.fromtarfile(self)
+        except EOFHeaderError as e:
+            if self.ignore_zeros:
+                self._dbg(2, "0x%X: %s" % (self.offset, e))
+                self.offset += BLOCKSIZE
+                continue
+        except InvalidHeaderError as e:
+            if self.ignore_zeros:
+                self._dbg(2, "0x%X: %s" % (self.offset, e))
+                self.offset += BLOCKSIZE
+                continue
+            elif self.offset == 0:
+                raise ReadError(str(e))
+        except EmptyHeaderError:
+            if self.offset == 0:
+                raise ReadError("empty file")
+        break
+    if tarinfo is not None:
+        self.members.append(tarinfo)
+    else:
+        self._loaded = True
+    return tarinfo
+
+# %% stdlib dead-code shapes: bare except that returns inside an else branch (fetch_completions)
+def fetch_completions(self, what, mode):
+    """Return a pair of lists of completions for something. The first list
+    is a sublist of the second. Both are sorted.
+
+    If there is a Python subprocess, get the comp. list there.  Otherwise,
+    either fetch_completions() is running in the subprocess itself or it
+    was called in an IDLE EditorWindow before any script had been run.
+
+    The subprocess environment is that of the most recently run script.  If
+    two unrelated modules are being edited some calltips in the current
+    module may be inoperative if the module was not the last to run.
+    """
+    try:
+        rpcclt = self.editwin.flist.pyshell.interp.rpcclt
+    except:
+        rpcclt = None
+    if rpcclt:
+        return rpcclt.remotecall("exec", "get_the_completion_list",
+                                 (what, mode), {})
+    else:
+        if mode == ATTRS:
+            if what == "":  # Main module names.
+                namespace = {**__main__.__builtins__.__dict__,
+                             **__main__.__dict__}
+                bigl = eval("dir()", namespace)
+                kwds = (s for s in keyword.kwlist
+                        if s not in {'True', 'False', 'None'})
+                bigl.extend(kwds)
+                bigl.sort()
+                if "__all__" in bigl:
+                    smalll = sorted(eval("__all__", namespace))
+                else:
+                    smalll = [s for s in bigl if s[:1] != '_']
+            else:
+                try:
+                    entity = self.get_entity(what)
+                    bigl = dir(entity)
+                    bigl.sort()
+                    if "__all__" in bigl:
+                        smalll = sorted(entity.__all__)
+                    else:
+                        smalll = [s for s in bigl if s[:1] != '_']
+                except:
+                    return [], []
+
+        elif mode == FILES:
+            if what == "":
+                what = "."
+            try:
+                expandedpath = os.path.expanduser(what)
+                bigl = os.listdir(expandedpath)
+                bigl.sort()
+                smalll = [s for s in bigl if s[:1] != '.']
+            except OSError:
+                return [], []
+
+        if not smalll:
+            smalll = bigl
+        return smalll, bigl
+

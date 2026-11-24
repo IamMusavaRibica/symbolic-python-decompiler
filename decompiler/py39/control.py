@@ -413,6 +413,16 @@ class ControlMixin:
             if orelse_jump is not None:
                 self.append_jump(orelse, orelse_jump, ctx)
 
+        if self.graph.dead_code and (body.exit is None) != (orelse.exit is None):
+            # [dead-code] one branch ended, the other stops at a jump statement's clean-up: when a
+            # jump inside the ended branch left a dead epilogue that leads past that clean-up (to
+            # the loop's end, say), nothing follows the if statement, so the clean-up is the open
+            # branch's own jump statement ('if a: x; break else: try: y; break except: continue')
+            open_block, ended, start = (body, second, first) if body.exit is not None else (orelse, first, second)
+            if self.body_jumps_past(ended, open_block.exit)                     and all(self.analysis.dominates(start, p) for p in self.analysis.forward_preds(open_block.exit)):
+                jump = self.resolve_jump(open_block.exit, ctx)
+                if jump is not None:
+                    self.append_jump(open_block, jump, ctx)
         after = body.exit if body.exit is not None else orelse.exit
         # [dead-code] (an else branch that ran into the dead epilogue of the enclosing try has ended too)
         dead_else = ends_function and body.terminated and (
