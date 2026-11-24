@@ -865,3 +865,59 @@ def fetch_completions(self, what, mode):
             smalll = bigl
         return smalll, bigl
 
+
+# %% stdlib dead-code shapes: if / elif / else whose first and last branches continue (unreachable code differs without the peephole)
+def f(self, myseq):
+    while 1:
+        seq, resq, how = self.get()
+        if how in ('CALL', 'QUEUE'):
+            response = self.localcall(seq, resq)
+            if how == 'CALL':
+                self.putmessage((seq, response))
+            elif how == 'QUEUE':
+                pass
+            continue
+        elif seq == myseq:
+            return resq
+        else:
+            cv = self.cvars.get(seq, None)
+            if cv is not None:
+                cv.acquire()
+                cv.release()
+            continue
+
+# %% stdlib dead-code shapes: while True with if-return, then try/except/else with continue (unreachable code differs without the peephole)
+def f(self):
+    while True:
+        if self.full():
+            return
+        try:
+            w = self.get()
+        except Empty:
+            return
+        else:
+            if w.ok():
+                self.put(w)
+            else:
+                del self.items[w]
+                continue
+
+# %% stdlib dead-code shapes: return inside an if inside a nested loop whose else branch ends in try/finally (unreachable code differs without the peephole)
+def f(bpopleft, sentinel, wacquire):
+    try:
+        while 1:
+            obj = bpopleft()
+            if obj is sentinel:
+                debug()
+                return
+            obj = dumps(obj)
+            if wacquire is None:
+                send_bytes(obj)
+            else:
+                wacquire()
+                try:
+                    send_bytes(obj)
+                finally:
+                    wrelease()
+    except IndexError:
+        pass

@@ -38,7 +38,7 @@ def main(argv=None) -> int:
     cases = [c for c in load_cases() if all(k in c.id for k in args.k)]
 
     started = time.time()
-    passed = failed = xfailed = xpassed = 0
+    passed = failed = xfailed = xpassed = dead_only = 0
     failures = []
     for outcome in run_cases(cases, modes):
         if outcome.result.ok:
@@ -47,6 +47,9 @@ def main(argv=None) -> int:
                 print(f'XPASS {outcome.case.id} [{outcome.mode}]  (remove the xfail marker)')
             else:
                 passed += 1
+                if outcome.result.stage == 'dead-code':
+                    dead_only += 1
+                    print(f'NOTE  {outcome.case.id} [{outcome.mode}]  {outcome.result.detail}')
             continue
         if outcome.xfail:
             xfailed += 1
@@ -77,6 +80,8 @@ def main(argv=None) -> int:
         summary += f', {xfailed} expected failures'
     if xpassed:
         summary += f', {xpassed} unexpectedly passing'
+    if dead_only:
+        summary += f', {dead_only} with unreachable code differing'
     print(f'{summary}  ({len(cases)} cases, compilers: {", ".join(modes)}, {time.time() - started:.1f}s)')
     return 1 if failed else 0
 

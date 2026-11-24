@@ -113,8 +113,10 @@ of two equivalent spellings was written), and spellings that only differ in unre
 by it (`if a: return 1 else: return 2` leaves the function's implicit `return None` behind,
 `if a: return 1` + `return 2` does not).
 
-State of things: the test cases pass all 454 runs in this mode, and the standard library round-trips completely
-(19 873 code objects). What fails are mostly try statements whose body or handlers end in a jump statement:
+State of things: the test cases pass all 460 runs in this mode, and the standard library round-trips completely
+(19 873 code objects). Each code object is verified on its own: when its live graph matches but its
+unreachable code does not, the round trip still passes and the decompiled source gets a comment above
+that definition saying so (`--check` and the corpus tool report these separately). What fails are mostly try statements whose body or handlers end in a jump statement:
 their dead epilogues (`POP_BLOCK`, `POP_EXCEPT`, the jump over the handlers) are sometimes read as statements,
 which either yields a different spelling (`compare: graphs differ`) or no parse (`cannot tell where control
 goes from here`).

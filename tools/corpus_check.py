@@ -57,10 +57,10 @@ def children_of(code: CodeType):
             if node.opname == 'LOAD_CONST' and isinstance(node.argval, CodeType)]
 
 
-def own_dump(code: CodeType) -> str:
+def own_dump(code: CodeType, dead_code=None) -> str:
     from decompiler.graph.builder import build_graph
     from decompiler.graph.dump import code_header, dump_graph
-    return code_header(code) + '\n' + '\n'.join(dump_graph(build_graph(code)))
+    return code_header(code) + '\n' + '\n'.join(dump_graph(build_graph(code, dead_code=dead_code)))
 
 
 def compare_trees(original: CodeType, recompiled: CodeType, path: str, mismatches: list, counter: list):
@@ -69,7 +69,13 @@ def compare_trees(original: CodeType, recompiled: CodeType, path: str, mismatche
     counter[0] += 1
     same = own_dump(original) == own_dump(recompiled)         or own_dump(optimize_code(original)) == own_dump(optimize_code(recompiled))  # as compare_code
     if not same:
-        mismatches.append(path)
+        from decompiler import options
+        if options.dead_code and (own_dump(original, False) == own_dump(recompiled, False)
+                                  or own_dump(optimize_code(original), False) == own_dump(optimize_code(recompiled), False)):
+            mismatches.append((path, 'dead'))  # [dead-code] the live code is right
+            same = True
+        else:
+            mismatches.append(path)
     a, b = children_of(original), children_of(recompiled)
     if same or len(a) == len(b):
         for x, y in zip(a, b):
@@ -122,6 +128,8 @@ def check_file(args):
             return result
         mismatches, counter = [], [0]
         compare_trees(code, recompiled, '<module>', mismatches, counter)
+        result['dead_only'] = [m[0] for m in mismatches if isinstance(m, tuple)]
+        mismatches = [m for m in mismatches if not isinstance(m, tuple)]
         for name in mismatches:
             if name in failed:
                 result['bad'].append([name, 'decompile: ' + failed[name]])
@@ -233,6 +241,9 @@ def main(argv=None) -> int:
     usable = [r for r in results if not (r['fatal'] or '').startswith('skipped')]
     print(f'{len(usable)} files, {clean_files} fully correct '
           f'({100.0 * clean_files / max(len(usable), 1):.1f}%)')
+    dead_only = sum(len(r.get('dead_only', ())) for r in results)
+    if dead_only:
+        print(f'{dead_only} code objects whose live code is right while their unreachable code differs')
     print(f'{objects} code objects, {objects - bad_objects} correct '
           f'({100.0 * (objects - bad_objects) / max(objects, 1):.1f}%)   [{time.time() - started:.0f}s]')
     print()

@@ -77,7 +77,10 @@ def main(argv=None) -> int:
         if result.decompiled is not None:
             print(result.decompiled)
         if result.ok:
-            print('# graphs are equal', file=sys.stderr)
+            if result.stage == 'dead-code':
+                print(f'# live graphs are equal; {result.detail}', file=sys.stderr)
+            else:
+                print('# graphs are equal', file=sys.stderr)
             return 0
         print(f'# FAILED at stage {result.stage!r}', file=sys.stderr)
         print(result.detail, file=sys.stderr)

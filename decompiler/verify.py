@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import traceback
 from types import CodeType
-from typing import Callable, NamedTuple, Optional
+from typing import Callable, NamedTuple, Optional, Tuple
 
 from decompiler.graph.compare import compare_code
 from decompiler.utils.bytecode import compile_flags_for, compile_source, compile_without_peephole
@@ -32,6 +32,9 @@ class RoundTrip(NamedTuple):
     detail: str
     #: the decompiled source, when the decompiler produced one
     decompiled: Optional[str]
+    #: [dead-code] qualified paths of code objects whose unreachable code differs from the original
+    #: while the live code is equal (stage 'dead-code', still ok)
+    dead_only: Tuple[str, ...] = ()
 
     def __bool__(self):
         return self.ok
@@ -53,7 +56,31 @@ def verify_code(code: CodeType, compiler: Callable[..., CodeType] = COMPILERS[ST
     comparison = compare_code(code, recompiled)
     if not comparison:
         return RoundTrip(False, 'compare', comparison.diff, decompiled)
+    if comparison.dead_only:
+        # [dead-code] right as far as the live code goes; say so in the source
+        return RoundTrip(True, 'dead-code', 'unreachable code differs in: ' + ', '.join(comparison.dead_only),
+                         annotate(decompiled, comparison.dead_only), comparison.dead_only)
     return RoundTrip(True, 'ok', '', decompiled)
+
+
+NOTE = '# decompiler: the live code of this body is verified; its unreachable code differs from the original'
+
+
+def annotate(decompiled: str, paths) -> str:
+    """[dead-code] Put a comment above every definition named in ``paths`` (qualified, '<module>' first)."""
+    lines = decompiled.split('\n')
+    for path in paths:
+        name = path.rsplit('.', 1)[-1]
+        if name == '<module>':
+            lines.insert(0, NOTE)
+            continue
+        for i, line in enumerate(lines):
+            stripped = line.lstrip()
+            if stripped.startswith((f'def {name}(', f'async def {name}(', f'class {name}:', f'class {name}(')):
+                indent = line[:len(line) - len(stripped)]
+                lines.insert(i, indent + NOTE)
+                break
+    return '\n'.join(lines)
 
 
 def verify_source(source: str, mode: str = STOCK, flags: int = 0) -> RoundTrip:
