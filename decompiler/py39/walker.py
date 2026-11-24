@@ -393,8 +393,8 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             return None
         for anchor, entry in self.graph.dead_entries:
             if anchor is last:
-                if own and entry in self.graph.dead_gapped:
-                    return None
+                if own and (entry in self.graph.dead_gapped or entry.opname in ('RERAISE', 'SETUP_FINALLY')):
+                    return None  # (the optimizer leaves those two standing: no evidence either)
                 return entry
         return None
 

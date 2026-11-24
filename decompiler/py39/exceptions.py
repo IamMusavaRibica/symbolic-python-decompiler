@@ -98,8 +98,22 @@ class ExceptionMixin:
             # constant, which looks like the body falling through.  When the body's own normal
             # exit exists as dead code, it did not fall through: the live way out is a return.
             region = self.closes_with_dead(node.next)
-            if region is not None and region.opname == 'POP_BLOCK' and region not in self._dead_claimed:
-                fb.dead_normal_exit = region
+            fragment = self.return_fragment(region)
+            if fragment is not None and region not in self._dead_claimed:
+                # the rest of the return statement whose finally copy returned first (the optimizer
+                # duplicated the return into the copy): the normal exit hangs off it
+                self._dead_claimed.add(region)
+                region = fragment.dead_next
+            logger.debug('try/finally at {}: dead region behind the body {}', node, region)
+            if region is not None and region not in self._dead_claimed:
+                if region.opname == 'POP_BLOCK':
+                    fb.dead_normal_exit = region
+                elif region.opname == 'SETUP_FINALLY' and self.skip_finally_copy(fb, region) is not TERMINATED:
+                    # the optimizer wiped the POP_BLOCK behind the return and stopped at the copy's
+                    # SETUP_FINALLY: the copy stands there without it (claimed now: it would read
+                    # as statements after the return otherwise)
+                    fb.dead_normal_exit, fb.dead_exit_bare = region, True
+                    self._dead_claimed.add(region)
 
         body_ctx = ctx.evolve(start=node.next, push=fb)
         body = self.parse_block(node.next, stack, body_ctx)
@@ -127,10 +141,10 @@ class ExceptionMixin:
                     after = TERMINATED
             if body.exit.dead and after is not TERMINATED and not self.follow_dead_jumps(after).dead:
                 after = TERMINATED  # [dead-code] a dead epilogue that leads to live code: see parse_handlers
-        elif fb.dead_normal_exit is not None and fb.dead_normal_exit not in self._dead_claimed:
+        elif fb.dead_normal_exit is not None and (fb.dead_exit_bare or fb.dead_normal_exit not in self._dead_claimed):
             # [dead-code] the statement continues (dead) where its unreachable normal exit leads
             self._dead_claimed.add(fb.dead_normal_exit)
-            after = self.skip_finally_copy(fb, fb.dead_normal_exit.next)
+            after = self.skip_finally_copy(fb, fb.dead_normal_exit if fb.dead_exit_bare else fb.dead_normal_exit.next)
             if after is not TERMINATED and not self.follow_dead_jumps(after).dead:
                 after = TERMINATED
         st.emit(ast.Try(body=body.stmts or [ast.Pass()], handlers=[], orelse=[],
