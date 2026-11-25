@@ -25,9 +25,9 @@ The readme is the user-facing overview; this file is the engineering knowledge.
   `python tools/corpus_check.py [-n] [--dead-code] -j 8` (stdlib by default; pass paths for other corpora),
   `python tools/build_graph.py FILE [-k NAME] [-c] [--dead-code]` (renders one .svg per code object).
 - State at the time of writing: default mode round-trips 100% of the stdlib (19 873 code objects) with both
-  compilers, the CPython test suite (43 183) and eight large packages (108 182); the test suite is 460/460
-  with both compilers in both modes; dead-code mode round-trips the whole stdlib as well (with the
-  peephole-less compiler: 2 failures and 6 objects whose unreachable code differs).
+  compilers, the CPython test suite (43 183) and eight large packages (108 182); the test suite is 466/466
+  with both compilers in both modes; dead-code mode round-trips the whole stdlib and the eight packages (82 543 objects) as well
+  (with the peephole-less compiler, stdlib: 2 failures and 6 objects whose unreachable code differs).
 - Git: commit with `git -c commit.gpgsign=false commit ...` (signing is configured and would prompt for a
   passphrase). No `Co-Authored-By` or other attribution trailers in commit messages.
 

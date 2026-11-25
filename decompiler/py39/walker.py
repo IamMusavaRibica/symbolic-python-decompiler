@@ -111,7 +111,28 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             if e.code_name is None:
                 e.code_name = self.code.co_name
             raise
+        if self.graph.dead_code:
+            block.stmts.extend(self.orphan_dead_code(ctx))
         return block.stmts
+
+    def orphan_dead_code(self, ctx: Ctx) -> List[ast.stmt]:
+        """[dead-code] Unreachable regions no statement claimed, as 'if False:' blocks at the end of
+        the body: their place is unknown, but what they say is kept.  Regions that are clean-up
+        code (an epilogue, a return fragment, a handler) or that do not parse are left out."""
+        out: List[ast.stmt] = []
+        for anchor, entry in sorted(self.graph.dead_entries, key=lambda e: e[1].offset):
+            if entry in self._dead_claimed or entry.opname in BLOCK_END_OPS                     or entry.opname in ('WITH_EXCEPT_START', 'DUP_TOP', 'JUMP_ABSOLUTE', 'JUMP_FORWARD')                     or self.return_fragment(entry) is not None or entry is self.implicit_end:
+                continue
+            self._dead_claimed.add(entry)
+            try:
+                tail = self.parse_block(entry, [], ctx.evolve(start=entry))
+            except DecompileError as e:
+                logger.debug('orphan dead region at {} dropped: {}', entry, e)
+                continue
+            stmts = [st for st in tail.stmts if not (isinstance(st, ast.Return) and st.value is None)]
+            if stmts:
+                out.append(ast.If(test=ast.Constant(value=False), body=stmts, orelse=[]))
+        return out
 
     # -- blocks --------------------------------------------------------------
     def parse_block(self, start: InstructionNode, stack: list, ctx: Ctx, entering: bool = False) -> Block:
@@ -169,8 +190,9 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
                 st.emit(ast.Continue())  # [dead-code]
                 result = TERMINATED
             if result is TERMINATED:
+                extent, st.extent = st.extent, None  # [dead-code]
                 if self.graph.dead_code and not self._dead_no_claim:  # [dead-code]
-                    continuation = self.dead_continuation(statement[0], ctx)
+                    continuation = self.dead_continuation(statement[0], ctx, extent=extent)
                     while continuation is not None and continuation.dead and continuation.jump is statement[0]                             and continuation.opname in ('JUMP_ABSOLUTE', 'JUMP_FORWARD'):
                         # a loop's own back jump, dead because the body's last jump was threaded
                         # past it: what follows it is the code after the loop
@@ -421,7 +443,8 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
             node = node.next
         return None
 
-    def dead_continuation(self, head: InstructionNode, ctx: Ctx, claim: bool = True) -> Optional[InstructionNode]:
+    def dead_continuation(self, head: InstructionNode, ctx: Ctx, claim: bool = True,
+                          extent: Optional[int] = None) -> Optional[InstructionNode]:
         """[dead-code] The unreachable code that follows the statement starting at ``head``, if any.
 
         The statement that ended the block consists of nodes ``head`` dominates; the
@@ -430,8 +453,16 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         """
         dominates = self.analysis.dominates
         toplevel = ctx.start is self.graph.entry
+        # the statement ends, in layout, where the first live node it does not dominate begins
+        # (the else clause of its if, the next statement after a shared join): what hangs off
+        # later anchors belongs to later statements, however the dominance reads
+        limit = min((n.offset for n in self.graph.nodes
+                     if not n.dead and not n.is_pseudo and n.offset > head.offset and not dominates(head, n)),
+                    default=None)
         candidates = [entry for anchor, entry in self.graph.dead_entries
                       if entry not in self._dead_claimed and anchor.offset >= head.offset and dominates(head, anchor)
+                      and (limit is None or anchor.offset < limit)
+                      and (extent is None or anchor.offset <= extent)
                       and (toplevel or entry is not self.implicit_end)]
         if not candidates:
             return None
@@ -473,6 +504,8 @@ class Walker(ExpressionMixin, StatementMixin, ControlMixin, ExceptionMixin, Defi
         loop = ctx.loop
         if not self.graph.dead_code or loop is None or node.dead or node in loop.nodes or node.is_pseudo:
             return False
+        if ctx.inside is not None and ctx.inside[0] == ctx.loop_depth and node.offset < ctx.inside[1]:
+            return False  # inside a try body, handler or with body of this loop's body
         # (reached by jumps only, never by falling through: a threaded fall-through, or a branch's
         # taken edge, which the optimizer may have threaded through the 'break' jump itself)
         # (a for loop's body ends where FOR_ITER leaves to; a while loop's where its last back jump

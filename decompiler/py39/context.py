@@ -162,7 +162,7 @@ class HandlerCleanupBlock(FBlock):
 
 class Ctx:
     """Where a block lives: its dominance region, where it must stop and what encloses it."""
-    __slots__ = ('start', 'stops', 'base', 'fblocks', 'bound')
+    __slots__ = ('start', 'stops', 'base', 'fblocks', 'bound', 'inside')
 
     def __init__(self, start: InstructionNode, stops: FrozenSet[InstructionNode], base: int,
                  fblocks: Tuple[FBlock, ...]):
@@ -172,14 +172,22 @@ class Ctx:
         self.fblocks = fblocks  # enclosing frame blocks, outermost first
         #: [dead-code] offset from which on code belongs to a later construct (an if body's else clause)
         self.bound: Optional[int] = None
+        #: [dead-code] (loop depth, offset): the code of the innermost enclosing try body, handler or with
+        #: body nested in the loop at that depth ends before that offset, so a node before it is inside the loop
+        self.inside = None
 
-    def evolve(self, start=None, stops=None, base=None, push=None, bound=None) -> 'Ctx':
+    def evolve(self, start=None, stops=None, base=None, push=None, bound=None, inside=None) -> 'Ctx':
         ctx = Ctx(self.start if start is None else start,
                   self.stops if stops is None else stops,
                   self.base if base is None else base,
                   self.fblocks if push is None else self.fblocks + (push,))
         ctx.bound = self.bound if bound is None else bound  # [dead-code]
+        ctx.inside = self.inside if inside is None else (ctx.loop_depth, inside)  # [dead-code]
         return ctx
+
+    @property
+    def loop_depth(self) -> int:
+        return sum(1 for fb in self.fblocks if fb.is_loop)
 
     @property
     def loop(self) -> Optional[LoopBlock]:
@@ -192,7 +200,7 @@ class Ctx:
 
 class State:
     """The symbolic machine state while a block is being parsed."""
-    __slots__ = ('stack', 'stmts', 'ctx', 'pending', 'implicit_end')
+    __slots__ = ('stack', 'stmts', 'ctx', 'pending', 'implicit_end', 'extent')
 
     def __init__(self, stack: list, ctx: Ctx):
         self.stack = stack
@@ -200,6 +208,9 @@ class State:
         self.ctx = ctx
         #: the block reached the implicit 'return None' that ends a module or class body
         self.implicit_end = False
+        #: [dead-code] offset where the statement that just terminated ends in layout, when its
+        #: construct knows (a try statement's closing RERAISE): its dead continuation hangs off its own code
+        self.extent = None
         #: (target, value) pairs of a tuple assignment compiled without building the tuple
         self.pending: List[Tuple[ast.expr, ast.expr]] = []
 

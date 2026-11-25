@@ -921,3 +921,236 @@ def f(bpopleft, sentinel, wacquire):
                     wrelease()
     except IndexError:
         pass
+
+# %% package dead-code shapes: twisted lockfile.lock: a raise at the end of a handler in a while True whose body ends in return
+def lock(self):
+    clean = True
+    while True:
+        try:
+            symlink(str(os.getpid()), self.name)
+        except OSError as e:
+            if _windows and e.errno in (errno.EACCES, errno.EIO):
+                # The lock is in the middle of being deleted because we're
+                # on Windows where lock removal isn't atomic.  Give up, we
+                # don't know how long this is going to take.
+                return False
+            if e.errno == errno.EEXIST:
+                try:
+                    pid = readlink(self.name)
+                except OSError as e:
+                    if e.errno == errno.ENOENT:
+                        # The lock has vanished, try to claim it in the
+                        # next iteration through the loop.
+                        continue
+                    elif _windows and e.errno == errno.EACCES:
+                        # The lock is in the middle of being
+                        # deleted because we're on Windows where
+                        # lock removal isn't atomic.  Give up, we
+                        # don't know how long this is going to
+                        # take.
+                        return False
+                    raise
+                try:
+                    if kill is not None:
+                        kill(int(pid), 0)
+                except OSError as e:
+                    if e.errno == errno.ESRCH:
+                        # The owner has vanished, try to claim it in the
+                        # next iteration through the loop.
+                        try:
+                            rmlink(self.name)
+                        except OSError as e:
+                            if e.errno == errno.ENOENT:
+                                # Another process cleaned up the lock.
+                                # Race them to acquire it in the next
+                                # iteration through the loop.
+                                continue
+                            raise
+                        clean = False
+                        continue
+                    raise
+                return False
+            raise
+        self.locked = True
+        self.clean = clean
+        return True
+
+# %% package dead-code shapes: astroid _islots: a handler epilogue of a later statement must not continue an earlier try
+def _islots(self):
+    if "__slots__" not in self.locals:
+        return None
+    for slots in self.igetattr("__slots__"):
+        # check if __slots__ is a valid type
+        for meth in ITER_METHODS:
+            try:
+                slots.getattr(meth)
+                break
+            except AttributeInferenceError:
+                continue
+        else:
+            continue
+
+        if isinstance(slots, node_classes.Const):
+            # a string. Ignore the following checks,
+            # but yield the node, only if it has a value
+            if slots.value:
+                yield slots
+            continue
+        if not hasattr(slots, "itered"):
+            # we can't obtain the values, maybe a .deque?
+            continue
+
+        if isinstance(slots, node_classes.Dict):
+            values = [item[0] for item in slots.items]
+        else:
+            values = slots.itered()
+        if isinstance(values, util.UninferableBase):
+            continue
+        if not values:
+            # Stop the iteration, because the class
+            # has an empty list of slots.
+            return values
+
+        for elt in values:
+            try:
+                for inferred in elt.infer():
+                    if not isinstance(
+                        inferred, node_classes.Const
+                    ) or not isinstance(inferred.value, str):
+                        continue
+                    if not inferred.value:
+                        continue
+                    yield inferred
+            except InferenceError:
+                continue
+
+    return None
+
+# %% package dead-code shapes: sympy pde: an if body that is a try whose dead epilogue leads to the false branch target
+def pde_1st_linear_variable_coeff(eq, func, order, match, solvefun):
+    r"""
+    Solves a first order linear partial differential equation
+    with variable coefficients. The general form of this partial
+    differential equation is
+
+    .. math:: a(x, y) \frac{\partial f(x, y)}{\partial x}
+                + b(x, y) \frac{\partial f(x, y)}{\partial y}
+                + c(x, y) f(x, y) = G(x, y)
+
+    where `a(x, y)`, `b(x, y)`, `c(x, y)` and `G(x, y)` are arbitrary
+    functions in `x` and `y`. This PDE is converted into an ODE by
+    making the following transformation:
+
+    1. `\xi` as `x`
+
+    2. `\eta` as the constant in the solution to the differential
+       equation `\frac{dy}{dx} = -\frac{b}{a}`
+
+    Making the previous substitutions reduces it to the linear ODE
+
+    .. math:: a(\xi, \eta)\frac{du}{d\xi} + c(\xi, \eta)u - G(\xi, \eta) = 0
+
+    which can be solved using ``dsolve``.
+
+    >>> from sympy.abc import x, y
+    >>> from sympy import Function, pprint
+    >>> a, b, c, G, f= [Function(i) for i in ['a', 'b', 'c', 'G', 'f']]
+    >>> u = f(x,y)
+    >>> ux = u.diff(x)
+    >>> uy = u.diff(y)
+    >>> genform = a(x, y)*u + b(x, y)*ux + c(x, y)*uy - G(x,y)
+    >>> pprint(genform)
+                                         d                     d
+    -G(x, y) + a(x, y)*f(x, y) + b(x, y)*--(f(x, y)) + c(x, y)*--(f(x, y))
+                                         dx                    dy
+
+
+    Examples
+    ========
+
+    >>> from sympy.solvers.pde import pdsolve
+    >>> from sympy import Function, pprint
+    >>> from sympy.abc import x,y
+    >>> f = Function('f')
+    >>> eq =  x*(u.diff(x)) - y*(u.diff(y)) + y**2*u - y**2
+    >>> pdsolve(eq)
+    Eq(f(x, y), F(x*y)*exp(y**2/2) + 1)
+
+    References
+    ==========
+
+    - Viktor Grigoryan, "Partial Differential Equations"
+      Math 124A - Fall 2010, pp.7
+
+    """
+    from sympy.solvers.ode import dsolve
+
+    eta = symbols("eta")
+    f = func.func
+    x = func.args[0]
+    y = func.args[1]
+    b = match[match['b']]
+    c = match[match['c']]
+    d = match[match['d']]
+    e = -match[match['e']]
+
+
+    if not d:
+         # To deal with cases like b*ux = e or c*uy = e
+        if not (b and c):
+            if c:
+                try:
+                    tsol = integrate(e/c, y)
+                except NotImplementedError:
+                    raise NotImplementedError("Unable to find a solution"
+                        " due to inability of integrate")
+                else:
+                    return Eq(f(x,y), solvefun(x) + tsol)
+            if b:
+                try:
+                    tsol = integrate(e/b, x)
+                except NotImplementedError:
+                    raise NotImplementedError("Unable to find a solution"
+                        " due to inability of integrate")
+                else:
+                    return Eq(f(x,y), solvefun(y) + tsol)
+
+    if not c:
+        # To deal with cases when c is 0, a simpler method is used.
+        # The PDE reduces to b*(u.diff(x)) + d*u = e, which is a linear ODE in x
+        plode = f(x).diff(x)*b + d*f(x) - e
+        sol = dsolve(plode, f(x))
+        syms = sol.free_symbols - plode.free_symbols - {x, y}
+        rhs = _simplify_variable_coeff(sol.rhs, syms, solvefun, y)
+        return Eq(f(x, y), rhs)
+
+    if not b:
+        # To deal with cases when b is 0, a simpler method is used.
+        # The PDE reduces to c*(u.diff(y)) + d*u = e, which is a linear ODE in y
+        plode = f(y).diff(y)*c + d*f(y) - e
+        sol = dsolve(plode, f(y))
+        syms = sol.free_symbols - plode.free_symbols - {x, y}
+        rhs = _simplify_variable_coeff(sol.rhs, syms, solvefun, x)
+        return Eq(f(x, y), rhs)
+
+    dummy = Function('d')
+    h = (c/b).subs(y, dummy(x))
+    sol = dsolve(dummy(x).diff(x) - h, dummy(x))
+    if isinstance(sol, list):
+        sol = sol[0]
+    solsym = sol.free_symbols - h.free_symbols - {x, y}
+    if len(solsym) == 1:
+        solsym = solsym.pop()
+        etat = (solve(sol, solsym)[0]).subs(dummy(x), y)
+        ysub = solve(eta - etat, y)[0]
+        deq = (b*(f(x).diff(x)) + d*f(x) - e).subs(y, ysub)
+        final = (dsolve(deq, f(x), hint='1st_linear')).rhs
+        if isinstance(final, list):
+            final = final[0]
+        finsyms = final.free_symbols - deq.free_symbols - {x, y}
+        rhs = _simplify_variable_coeff(final, finsyms, solvefun, etat)
+        return Eq(f(x, y), rhs)
+
+    else:
+        raise NotImplementedError("Cannot solve the partial differential equation due"
+            " to inability of constantsimp")

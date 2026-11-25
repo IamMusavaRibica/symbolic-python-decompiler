@@ -96,7 +96,8 @@ with a source line of 255+ bytes of bytecode, so the same program compiles diffe
 layout, and the comparison must not care.
 
 State of things: the standard library of 3.9 round-trips completely (641 files, 19 873 code objects), and so do
-sympy, django, sqlalchemy, twisted, botocore, pygments, astroid and jedi (108 182 code objects). The CPython test
+sympy, django, sqlalchemy, twisted, botocore, pygments, astroid and jedi (82 543 code objects in the
+installed versions; the same eight round-trip completely in dead-code mode too, 22 of them with a note). The CPython test
 suite round-trips completely as well (43 183 code objects).
 
 ## Unreachable code (experimental, off by default)
@@ -113,7 +114,7 @@ of two equivalent spellings was written), and spellings that only differ in unre
 by it (`if a: return 1 else: return 2` leaves the function's implicit `return None` behind,
 `if a: return 1` + `return 2` does not).
 
-State of things: the test cases pass all 460 runs in this mode, and the standard library round-trips completely
+State of things: the test cases pass all 466 runs in this mode, and the standard library round-trips completely
 (19 873 code objects). Each code object is verified on its own: when its live graph matches but its
 unreachable code does not, the round trip still passes and the decompiled source gets a comment above
 that definition saying so (`--check` and the corpus tool report these separately). What fails are mostly try statements whose body or handlers end in a jump statement:

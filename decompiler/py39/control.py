@@ -367,7 +367,12 @@ class ControlMixin:
             # (not when the body ends by reaching the implicit end of a module or class body)
             st.emit(ast.If(test=test, body=body.stmts or [ast.Pass()], orelse=[]))
             return second
-        orelse = self.parse_branch(second, cond.nodes, stack, ctx)
+        if self.graph.dead_code and body.exit is second and not body.terminated:
+            # [dead-code] the body flows to where the other branch starts (told by a dead epilogue
+            # of its last statement): that is the join, there is no else clause
+            orelse = Block([], second, list(stack))
+        else:
+            orelse = self.parse_branch(second, cond.nodes, stack, ctx)
 
         if (body.exit is not None and body.exit is orelse.exit and not body.stmts and not orelse.stmts
                 and len(body.stack) == depth + 1 == len(orelse.stack)
@@ -391,7 +396,7 @@ class ControlMixin:
             if body_jump is None and orelse_jump is None:
                 self.check_missing_loop(body.exit, ctx)
                 self.check_missing_loop(orelse.exit, ctx)
-                raise DecompileError('the branches of an if never meet', cond.last)
+                raise DecompileError(f'the branches of an if never meet ({body.exit} / {orelse.exit})', cond.last)
             logger.debug('if at {}: body exit {} -> {}, else exit {} -> {}', cond.last, body.exit, body_jump, orelse.exit, orelse_jump)
             if body_jump is not None and orelse_jump is not None:
                 # Both could be jumps.  The one placed last in the bytecode may just as well be the
@@ -619,6 +624,7 @@ class ControlMixin:
         target = fb.break_target
         if normal_exit is None:
             # no way out except 'break'
+            st.extent = fb.end_offset  # [dead-code]
             orelse: list = []
             if self.graph.dead_code and target is not None:
                 # [dead-code] 'while True: ... else: X': X can never run; it is laid out between

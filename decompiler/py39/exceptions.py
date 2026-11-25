@@ -116,7 +116,7 @@ class ExceptionMixin:
                     fb.dead_normal_exit, fb.dead_exit_bare = region, True
                     self._dead_claimed.add(region)
 
-        body_ctx = ctx.evolve(start=node.next, push=fb)
+        body_ctx = ctx.evolve(start=node.next, push=fb, inside=entry.offset)
         body = self.parse_block(node.next, stack, body_ctx)
         logger.debug('try/finally at {}: body exit {}, dead normal exit {}, terminal {}', node, body.exit, fb.dead_normal_exit, fb.terminal)
         after = TERMINATED
@@ -150,12 +150,14 @@ class ExceptionMixin:
                 after = TERMINATED
         st.emit(ast.Try(body=body.stmts or [ast.Pass()], handlers=[], orelse=[],
                         finalbody=final.stmts or [ast.Pass()]))
+        if after is TERMINATED and fb.terminal is not None:
+            st.extent = fb.terminal.offset  # [dead-code]
         return after
 
     # -- try / except --------------------------------------------------------------------
     def parse_try_except(self, node, st: State):
         ctx, stack = st.ctx, st.stack
-        body_ctx = ctx.evolve(start=node.next, push=TryExceptBlock())
+        body_ctx = ctx.evolve(start=node.next, push=TryExceptBlock(), inside=node.jump.offset)
         body = self.parse_block(node.next, stack, body_ctx)
         after_body = None
         self.drop_foreign_epilogue(body, 'POP_BLOCK')
@@ -254,6 +256,8 @@ class ExceptionMixin:
             handlers=[ast.ExceptHandler(type=h.type, name=h.name, body=h.block.stmts or [ast.Pass()])
                       for h in handlers],
             orelse=orelse, finalbody=[]))
+        if join is None and self._handlers_end is not None:
+            st.extent = self._handlers_end.offset  # [dead-code]
         return join if join is not None else TERMINATED
 
     def dead_try_join(self, node, handlers, after_body, ctx):
@@ -283,6 +287,7 @@ class ExceptionMixin:
         saved = exc_stack[:-3]
         handlers: List[Handler] = []
         current = entry
+        self._handlers_end = None  # [dead-code] the RERAISE closing the chain, when reached
         while current.opname != 'RERAISE':
             exc_type = None
             following = None
@@ -319,7 +324,8 @@ class ExceptionMixin:
                 if end is None or end.opname != 'RERAISE':
                     raise DecompileError('unsupported except clause', node)
                 node = node.next
-            handler_ctx = ctx.evolve(start=node, base=len(saved), push=cleanup)
+            handler_ctx = ctx.evolve(start=node, base=len(saved), push=cleanup,
+                                     inside=following.offset if following is not None else None)
             block = self.parse_block(node, saved, handler_ctx)
             after = None
             dead_after = None
@@ -344,6 +350,8 @@ class ExceptionMixin:
             if following is None:
                 break  # a bare 'except:' is always the last one
             current = following
+        else:
+            self._handlers_end = current  # [dead-code]
         return handlers
 
     # -- with ------------------------------------------------------------------------------
@@ -377,7 +385,7 @@ class ExceptionMixin:
             target = marker.target
 
         fb = WithBlock(is_async)
-        body_ctx = ctx.evolve(start=start, base=len(inner), push=fb)
+        body_ctx = ctx.evolve(start=start, base=len(inner), push=fb, inside=node.jump.offset)
         body = self.parse_block(start, inner, body_ctx)
 
         # exception path: WITH_EXCEPT_START, test; true -> swallow the exception and go on
